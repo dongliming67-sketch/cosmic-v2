@@ -64,7 +64,7 @@ function App() {
     }
     return 30;
   });
-  // 拆分模式: 'quantity' = 数量优先, 'quality' = 质量优先
+  // 拆分模式: 'quantity' = 数量优先, 'quality' = 质量优先, 'three-layer' = 三层分析框架
   const [splitMode, setSplitMode] = useState('quality');
   const [understanding, setUnderstanding] = useState(null);
   const [analysisPhase, setAnalysisPhase] = useState(''); // 'understanding' | 'splitting' | 'reviewing' | ''
@@ -72,6 +72,15 @@ function App() {
 
   const [isWaitingForAnalysis, setIsWaitingForAnalysis] = useState(false);
   const [userGuidelines, setUserGuidelines] = useState('');
+  const [providerExpanded, setProviderExpanded] = useState(false); // 大模型提供商折叠状态
+
+  // 三层分析框架的模型提供商选择: 'openrouter' | 'groq' | 'zhipu' | 'auto'
+  const [threeLayerProvider, setThreeLayerProvider] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return window.localStorage.getItem('threeLayerProvider') || 'auto';
+    }
+    return 'auto';
+  });
 
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -89,6 +98,13 @@ function App() {
       window.localStorage.setItem('minFunctionCount', String(minFunctionCount));
     }
   }, [minFunctionCount]);
+
+  // 持久化三层分析框架提供商选择
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('threeLayerProvider', threeLayerProvider);
+    }
+  }, [threeLayerProvider]);
 
   // 自动滚动到底部
   useEffect(() => {
@@ -118,8 +134,10 @@ function App() {
     setSplitMode(mode);
     if (mode === 'quality') {
       showToast('已切换到质量优先模式：根据文档内容智能识别功能过程，确保拆分质量');
-    } else {
+    } else if (mode === 'quantity') {
       showToast('已切换到数量优先模式：尽可能多地识别功能过程，达到目标数量');
+    } else if (mode === 'three-layer') {
+      showToast('已切换到三层分析框架模式（Groq）：FP边界清晰、属性唯一、ERWX完整闭环');
     }
   };
 
@@ -877,11 +895,129 @@ ${breakdownSummary}
     }
   };
 
+  // 三层分析框架模式 - 使用Groq API
+  const startThreeLayerAnalysis = async (content, guidelines = '') => {
+    if (!apiStatus.hasApiKey) {
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: '⚠️ 请先配置API密钥才能使用AI分析功能。点击右上角的设置按钮进行配置。'
+      }]);
+      return;
+    }
+
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    abortControllerRef.current = new AbortController();
+    const signal = abortControllerRef.current.signal;
+
+    setIsLoading(true);
+    setIsWaitingForAnalysis(false);
+    setStreamingContent('');
+    setTableData([]);
+
+    let allTableData = [];
+    let round = 1;
+    const maxRounds = 12;
+
+    try {
+      if (signal.aborted) return;
+
+      setMessages([{
+        role: 'system',
+        content: '🚀 **三层分析框架模式（**\n使用三层分析框架进行高质量COSMIC拆分...\n\n✓ 边界清晰\n✓ 属性唯一性高\n✓ ERWX完整闭环'
+      }]);
+
+      while (round <= maxRounds) {
+        if (signal.aborted) break;
+
+        setMessages(prev => [...prev, {
+          role: 'system',
+          content: `📊 **第 ${round} 轮分析**\n已完成 ${allTableData.filter(r => r.functionalProcess).length} 个功能过程，继续分析...`
+        }]);
+
+        const response = await axios.post('/api/three-layer-analyze', {
+          documentContent: content,
+          previousResults: allTableData,
+          round: round,
+          targetFunctions: minFunctionCount,
+          understanding: understanding,
+          userGuidelines: guidelines,
+          provider: threeLayerProvider
+        }, { signal });
+
+        if (response.data.success) {
+          const reply = response.data.reply;
+
+          setMessages(prev => [...prev, {
+            role: 'assistant',
+            content: reply
+          }]);
+
+          // 调用后端API解析表格数据
+          try {
+            const tableRes = await axios.post('/api/parse-table', { markdown: reply });
+            if (tableRes.data.success && tableRes.data.tableData.length > 0) {
+              const newRows = tableRes.data.tableData;
+              // 使用去重函数合并数据
+              const deduplicatedNewData = deduplicateByFunctionalProcess(allTableData, newRows);
+              if (deduplicatedNewData.length > 0) {
+                allTableData = [...allTableData, ...deduplicatedNewData];
+                setTableData(allTableData);
+                console.log(`三层分析框架第 ${round} 轮新增 ${deduplicatedNewData.length} 条数据`);
+              }
+            }
+          } catch (parseError) {
+            console.log(`三层分析框架第 ${round} 轮表格解析失败:`, parseError.message);
+          }
+
+          if (response.data.isDone) {
+            const uniqueFunctions = [...new Set(allTableData.map(r => r.functionalProcess).filter(Boolean))];
+            setMessages(prev => [...prev, {
+              role: 'system',
+              content: `✅ **三层分析框架拆分完成！**\n\n共识别 ${uniqueFunctions.length} 个功能过程，${allTableData.length} 个子过程\n\n使用桶义千问 完成分析`
+            }]);
+            break;
+          }
+
+          round++;
+        } else {
+          throw new Error(response.data.error || '分析失败');
+        }
+      }
+
+      if (round > maxRounds) {
+        setMessages(prev => [...prev, {
+          role: 'system',
+          content: `⚠️ 已达到最大轮次(${maxRounds}轮)，分析结束。`
+        }]);
+      }
+
+    } catch (error) {
+      if (error.name === 'CanceledError' || signal.aborted) {
+        setMessages(prev => [...prev, {
+          role: 'system',
+          content: '⚠️ 分析已中断'
+        }]);
+      } else {
+        console.error('三层分析框架失败:', error);
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          content: `❌ 分析失败: ${error.message}\n\n请检查密钥是否配置正确`
+        }]);
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   // 统一的分析入口
   const handleStartAnalysis = async (content, guidelines = '') => {
     setUserGuidelines(guidelines);
     if (splitMode === 'quality') {
       await startQualityAnalysis(content, guidelines);
+    } else if (splitMode === 'three-layer') {
+      await startThreeLayerAnalysis(content, guidelines);
     } else {
       await startAnalysis(content, guidelines);
     }
@@ -1093,7 +1229,7 @@ ${breakdownSummary}
                   : 'text-[#6B6760] hover:text-[#1A1915]'
                   }`}
               >
-                <Brain className="w-4 h-4" />
+                <Sparkles className="w-4 h-4" />
                 <span>质量优先</span>
               </button>
               <button
@@ -1105,6 +1241,16 @@ ${breakdownSummary}
               >
                 <Target className="w-4 h-4" />
                 <span>数量优先</span>
+              </button>
+              <button
+                onClick={() => handleSplitModeChange('three-layer')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${splitMode === 'three-layer'
+                  ? 'bg-white text-[#D97757] shadow-sm'
+                  : 'text-[#6B6760] hover:text-[#1A1915]'
+                  }`}
+              >
+                <Brain className="w-4 h-4" />
+                <span>三层分析框架</span>
               </button>
             </div>
 
@@ -1261,6 +1407,89 @@ ${breakdownSummary}
                 </div>
               )}
             </div>
+
+            {/* 三层分析框架模型选择 - 折叠式 */}
+            {splitMode === 'three-layer' && (
+              <div className="bg-white border border-[#E5E3DE] rounded-xl overflow-hidden">
+                <button
+                  onClick={() => setProviderExpanded(!providerExpanded)}
+                  className="w-full p-4 flex items-center justify-between hover:bg-[#FEF7F4] transition-all"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="text-left">
+                      <h3 className="text-sm font-medium text-[#1A1915]">大模型提供商</h3>
+                      <p className="text-xs text-[#A8A49E]">
+                        当前：{threeLayerProvider === 'auto' ? '自动选择' :
+                          threeLayerProvider === 'openrouter' ? '通义千问' :
+                            threeLayerProvider === 'groq' ? '文心一言' : '智谱AI'}
+                      </p>
+                    </div>
+                  </div>
+                  <ChevronDown className={`w-5 h-5 text-[#A8A49E] transition-transform duration-200 ${providerExpanded ? 'rotate-180' : ''}`} />
+                </button>
+
+                {providerExpanded && (
+                  <div className="px-4 pb-4 space-y-2 border-t border-[#E5E3DE]">
+                    <label className="flex items-center gap-3 p-3 border border-[#E5E3DE] rounded-lg cursor-pointer hover:bg-[#FEF7F4] transition-all mt-3">
+                      <input
+                        type="radio"
+                        name="threeLayerProvider"
+                        value="auto"
+                        checked={threeLayerProvider === 'auto'}
+                        onChange={(e) => setThreeLayerProvider(e.target.value)}
+                        className="w-4 h-4 text-[#D97757] focus:ring-[#D97757]"
+                      />
+                      <div className="flex-1">
+                        <div className="text-sm font-medium text-[#1A1915]">自动选择</div>
+                        <div className="text-xs text-[#A8A49E]">文心一言 → 通义千问 → 智谱</div>
+                      </div>
+                    </label>
+                    <label className="flex items-center gap-3 p-3 border border-[#E5E3DE] rounded-lg cursor-pointer hover:bg-[#FEF7F4] transition-all">
+                      <input
+                        type="radio"
+                        name="threeLayerProvider"
+                        value="openrouter"
+                        checked={threeLayerProvider === 'openrouter'}
+                        onChange={(e) => setThreeLayerProvider(e.target.value)}
+                        className="w-4 h-4 text-[#D97757] focus:ring-[#D97757]"
+                      />
+                      <div className="flex-1">
+                        <div className="text-sm font-medium text-[#1A1915]">通义千问</div>
+                        <div className="text-xs text-[#A8A49E]">通义千问测试 (免费)</div>
+                      </div>
+                    </label>
+                    <label className="flex items-center gap-3 p-3 border border-[#E5E3DE] rounded-lg cursor-pointer hover:bg-[#FEF7F4] transition-all">
+                      <input
+                        type="radio"
+                        name="threeLayerProvider"
+                        value="groq"
+                        checked={threeLayerProvider === 'groq'}
+                        onChange={(e) => setThreeLayerProvider(e.target.value)}
+                        className="w-4 h-4 text-[#D97757] focus:ring-[#D97757]"
+                      />
+                      <div className="flex-1">
+                        <div className="text-sm font-medium text-[#1A1915]">文心一言</div>
+                        <div className="text-xs text-[#A8A49E]">测试(速度快)</div>
+                      </div>
+                    </label>
+                    <label className="flex items-center gap-3 p-3 border border-[#E5E3DE] rounded-lg cursor-pointer hover:bg-[#FEF7F4] transition-all">
+                      <input
+                        type="radio"
+                        name="threeLayerProvider"
+                        value="zhipu"
+                        checked={threeLayerProvider === 'zhipu'}
+                        onChange={(e) => setThreeLayerProvider(e.target.value)}
+                        className="w-4 h-4 text-[#D97757] focus:ring-[#D97757]"
+                      />
+                      <div className="flex-1">
+                        <div className="text-sm font-medium text-[#1A1915]">智谱AI</div>
+                        <div className="text-xs text-[#A8A49E]">GLM-4 Flash (国内稳定)</div>
+                      </div>
+                    </label>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* 最少功能过程数量设置 */}
             <div className="bg-white border border-[#E5E3DE] rounded-xl p-5">

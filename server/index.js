@@ -61,6 +61,7 @@ const handleMulterError = (err, req, res, next) => {
 
 // OpenAI客户端
 let openai = null;
+let groqClient = null;
 
 function getOpenAIClient() {
   if (!openai && process.env.OPENAI_API_KEY) {
@@ -71,6 +72,23 @@ function getOpenAIClient() {
   }
   return openai;
 }
+
+// Groq客户端（用于三层分析框架模式）
+function getGroqClient() {
+  if (!groqClient && process.env.GROQ_API_KEY) {
+    const Groq = require('groq-sdk');
+    groqClient = new Groq({
+      apiKey: process.env.GROQ_API_KEY
+    });
+    console.log('Groq客户端已初始化，API Key:', process.env.GROQ_API_KEY ? '已配置' : '未配置');
+  }
+  return groqClient;
+}
+
+// 引入增强版提示词
+const { ENHANCED_COSMIC_SYSTEM_PROMPT } = require('./enhanced-prompts');
+// 引入三层分析框架API
+const { threeLayerAnalyze } = require('./three-layer-api');
 
 // Cosmic拆分系统提示词 - 融合Gemini四阶段方法论
 const COSMIC_SYSTEM_PROMPT = `你是一个顶级COSMIC分析专家与业务架构师。你的任务是运用四阶段方法论，将线性文档重构为"立体"的功能模型，确保输出的功能过程超越简单的增删改查（CRUD），具备极高的实战价值与物理层面的唯一性。
@@ -1146,63 +1164,63 @@ ${imageContext}
 # 输出要求
 # ═══════════════════════════════════════════════════════════
 
-请输出JSON格式的分析结果（必须包含字段池和锚定字段）：
-{
-  "projectName": "项目名称",
-  "projectDescription": "项目简述",
-  "systemArchitecture": "3D架构描述（流程轴、管理轴、深度轴的分布）",
-  "systemBoundary": "系统边界说明",
-  "userRoles": ["角色1", "角色2"],
-  "dataEntities": ["实体1", "实体2"],
-  "externalInterfaces": ["接口1", "接口2"],
-  "fieldPool": {
-    "businessFields": ["设备ID", "设备SN", "设备类型", "告警等级", "经纬度", "..."],
-    "managementFields": ["操作人ID", "时间戳", "流水号", "版本号", "重试次数", "错误代码", "..."]
-  },
-  "coreModules": [
+    请输出JSON格式的分析结果（必须包含字段池和锚定字段）：
     {
-      "moduleName": "模块名称",
-      "moduleDescription": "模块描述",
-      "subModules": ["子模块1", "子模块2"],
-      "estimatedFunctions": [
+      "projectName": "项目名称",
+        "projectDescription": "项目简述",
+          "systemArchitecture": "3D架构描述（流程轴、管理轴、深度轴的分布）",
+            "systemBoundary": "系统边界说明",
+              "userRoles": ["角色1", "角色2"],
+                "dataEntities": ["实体1", "实体2"],
+                  "externalInterfaces": ["接口1", "接口2"],
+                    "fieldPool": {
+        "businessFields": ["设备ID", "设备SN", "设备类型", "告警等级", "经纬度", "..."],
+          "managementFields": ["操作人ID", "时间戳", "流水号", "版本号", "重试次数", "错误代码", "..."]
+      },
+      "coreModules": [
         {
-          "functionName": "功能名称（Object+Action+State格式）",
-          "triggerType": "用户触发/时钟触发/接口触发",
-          "scenario": "使用场景描述",
-          "anchorField": "该功能的锚定核心字段（从fieldPool.businessFields中选择）",
-          "suggestedAttributes": "建议的字段组合（包含锚定字段+辅助字段，确保与其他功能互斥）"
+          "moduleName": "模块名称",
+          "moduleDescription": "模块描述",
+          "subModules": ["子模块1", "子模块2"],
+          "estimatedFunctions": [
+            {
+              "functionName": "功能名称（Object+Action+State格式）",
+              "triggerType": "用户触发/时钟触发/接口触发",
+              "scenario": "使用场景描述",
+              "anchorField": "该功能的锚定核心字段（从fieldPool.businessFields中选择）",
+              "suggestedAttributes": "建议的字段组合（包含锚定字段+辅助字段，确保与其他功能互斥）"
+            }
+          ]
         }
-      ]
+      ],
+        "timedTasks": [
+          {
+            "taskName": "定时任务名称",
+            "schedule": "执行频率",
+            "description": "任务描述"
+          }
+        ],
+          "crossModuleFunctions": [
+            {
+              "functionName": "跨模块功能名称",
+              "triggerType": "触发类型",
+              "relatedModules": ["模块1", "模块2"]
+            }
+          ],
+            "functionBreakdown": {
+        "userTriggeredFunctions": 0,
+          "timerTriggeredFunctions": 0,
+            "interfaceTriggeredFunctions": 0
+      },
+      "totalEstimatedFunctions": 30
     }
-  ],
-  "timedTasks": [
-    {
-      "taskName": "定时任务名称",
-      "schedule": "执行频率",
-      "description": "任务描述"
-    }
-  ],
-  "crossModuleFunctions": [
-    {
-      "functionName": "跨模块功能名称",
-      "triggerType": "触发类型",
-      "relatedModules": ["模块1", "模块2"]
-    }
-  ],
-  "functionBreakdown": {
-    "userTriggeredFunctions": 0,
-    "timerTriggeredFunctions": 0,
-    "interfaceTriggeredFunctions": 0
-  },
-  "totalEstimatedFunctions": 30
-}
 
-**关键要求**：
-1. fieldPool必须全面，包含文档中所有可能的字段
-2. 每个功能必须指定anchorField（锚定字段）
-3. suggestedAttributes要体现字段组合的互斥性
-4. 功能名称必须符合Object+Action+State格式
-5. 必须区分三种触发类型，并统计数量`;
+** 关键要求 **：
+    1. fieldPool必须全面，包含文档中所有可能的字段
+    2. 每个功能必须指定anchorField（锚定字段）
+    3. suggestedAttributes要体现字段组合的互斥性
+    4. 功能名称必须符合Object + Action + State格式
+    5. 必须区分三种触发类型，并统计数量`;
 
     const completion = await client.chat.completions.create({
       model: process.env.OPENAI_MODEL || 'glm-4-flash',
@@ -1406,6 +1424,11 @@ ${uniqueFunctions.length < expectedCount * 0.7 ? `
     console.error('质量审查失败:', error);
     res.status(500).json({ error: '质量审查失败: ' + error.message });
   }
+});
+
+// ========== 三层分析框架模式 API（使用智谱API） ==========
+app.post('/api/three-layer-analyze', (req, res) => {
+  threeLayerAnalyze(req, res, getOpenAIClient);
 });
 
 // 导出Excel
