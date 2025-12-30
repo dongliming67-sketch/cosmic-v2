@@ -82,6 +82,13 @@ function App() {
     return 'auto';
   });
 
+  // 两阶段动态分析：功能清单相关状态
+  const [functionList, setFunctionList] = useState(null); // AI提取的功能清单
+  const [showFunctionListPanel, setShowFunctionListPanel] = useState(false); // 是否显示确认面板
+  const [confirmedFunctions, setConfirmedFunctions] = useState([]); // 用户确认的功能列表
+  const [isExtractingFunctions, setIsExtractingFunctions] = useState(false); // 是否正在提取功能清单
+
+
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const dropZoneRef = useRef(null);
@@ -895,7 +902,8 @@ ${breakdownSummary}
     }
   };
 
-  // 三层分析框架模式 - 使用Groq API
+  // 三层分析框架模式 - 两阶段动态驱动分析
+  // 阶段1：提取功能清单让用户确认
   const startThreeLayerAnalysis = async (content, guidelines = '') => {
     if (!apiStatus.hasApiKey) {
       setMessages(prev => [...prev, {
@@ -912,87 +920,82 @@ ${breakdownSummary}
     const signal = abortControllerRef.current.signal;
 
     setIsLoading(true);
+    setIsExtractingFunctions(true);
     setIsWaitingForAnalysis(false);
     setStreamingContent('');
-    setTableData([]);
-
-    let allTableData = [];
-    let round = 1;
-    const maxRounds = 12;
 
     try {
       if (signal.aborted) return;
 
       setMessages([{
         role: 'system',
-        content: '🚀 **三层分析框架模式（**\n使用三层分析框架进行高质量COSMIC拆分...\n\n✓ 边界清晰\n✓ 属性唯一性高\n✓ ERWX完整闭环'
+        content: '🔍 **阶段1：功能清单提取**\n正在分析文档，识别所有功能点...\n\n完成后将显示功能清单供您确认、修改或补充。'
       }]);
 
-      while (round <= maxRounds) {
-        if (signal.aborted) break;
+      // 调用功能清单提取API
+      const response = await axios.post('/api/extract-function-list', {
+        documentContent: content
+      }, { signal });
 
-        setMessages(prev => [...prev, {
-          role: 'system',
-          content: `📊 **第 ${round} 轮分析**\n已完成 ${allTableData.filter(r => r.functionalProcess).length} 个功能过程，继续分析...`
-        }]);
+      if (response.data.success) {
+        const extractedList = response.data.functionList;
 
-        const response = await axios.post('/api/three-layer-analyze', {
-          documentContent: content,
-          previousResults: allTableData,
-          round: round,
-          targetFunctions: minFunctionCount,
-          understanding: understanding,
-          userGuidelines: guidelines,
-          provider: threeLayerProvider
-        }, { signal });
+        if (extractedList) {
+          setFunctionList(extractedList);
 
-        if (response.data.success) {
-          const reply = response.data.reply;
+          // 将所有功能展平为确认列表
+          const allFunctions = [];
+          (extractedList.modules || []).forEach(mod => {
+            (mod.functions || []).forEach(fn => {
+              allFunctions.push({
+                ...fn,
+                moduleName: mod.moduleName,
+                selected: true // 默认全选
+              });
+            });
+          });
+
+          // 添加定时任务
+          (extractedList.timedTasks || []).forEach((task, idx) => {
+            allFunctions.push({
+              id: `timer_${idx}`,
+              name: task.name,
+              triggerType: '时钟触发',
+              description: task.description,
+              interval: task.interval,
+              moduleName: '定时任务',
+              selected: true
+            });
+          });
+
+          setConfirmedFunctions(allFunctions);
+          setShowFunctionListPanel(true);
 
           setMessages(prev => [...prev, {
             role: 'assistant',
-            content: reply
+            content: `## ✅ 功能清单提取完成！
+
+**项目名称**：${extractedList.projectName || '未识别'}
+
+**识别到 ${extractedList.totalFunctions || allFunctions.length} 个功能点**
+
+请点击上方的 **"确认功能清单"** 按钮查看和编辑功能列表：
+- ✏️ 可以**删除**不需要的功能
+- ➕ 可以**添加**遗漏的功能
+- 📝 可以**修改**功能名称或描述
+
+确认后将开始ERWX拆分。`
           }]);
-
-          // 调用后端API解析表格数据
-          try {
-            const tableRes = await axios.post('/api/parse-table', { markdown: reply });
-            if (tableRes.data.success && tableRes.data.tableData.length > 0) {
-              const newRows = tableRes.data.tableData;
-              // 使用去重函数合并数据
-              const deduplicatedNewData = deduplicateByFunctionalProcess(allTableData, newRows);
-              if (deduplicatedNewData.length > 0) {
-                allTableData = [...allTableData, ...deduplicatedNewData];
-                setTableData(allTableData);
-                console.log(`三层分析框架第 ${round} 轮新增 ${deduplicatedNewData.length} 条数据`);
-              }
-            }
-          } catch (parseError) {
-            console.log(`三层分析框架第 ${round} 轮表格解析失败:`, parseError.message);
-          }
-
-          if (response.data.isDone) {
-            const uniqueFunctions = [...new Set(allTableData.map(r => r.functionalProcess).filter(Boolean))];
-            setMessages(prev => [...prev, {
-              role: 'system',
-              content: `✅ **三层分析框架拆分完成！**\n\n共识别 ${uniqueFunctions.length} 个功能过程，${allTableData.length} 个子过程\n\n使用桶义千问 完成分析`
-            }]);
-            break;
-          }
-
-          round++;
         } else {
-          throw new Error(response.data.error || '分析失败');
+          // 如果解析失败，显示原始响应
+          setMessages(prev => [...prev, {
+            role: 'assistant',
+            content: `## 📋 功能分析结果\n\n${response.data.rawResponse}\n\n⚠️ 自动解析失败，请手动复制上述功能列表。`
+          }]);
         }
+      } else {
+        throw new Error(response.data.error || '功能清单提取失败');
       }
-
-      if (round > maxRounds) {
-        setMessages(prev => [...prev, {
-          role: 'system',
-          content: `⚠️ 已达到最大轮次(${maxRounds}轮)，分析结束。`
-        }]);
-      }
-
     } catch (error) {
       if (error.name === 'CanceledError' || signal.aborted) {
         setMessages(prev => [...prev, {
@@ -1000,15 +1003,155 @@ ${breakdownSummary}
           content: '⚠️ 分析已中断'
         }]);
       } else {
-        console.error('三层分析框架失败:', error);
+        console.error('功能清单提取失败:', error);
         setMessages(prev => [...prev, {
           role: 'assistant',
-          content: `❌ 分析失败: ${error.message}\n\n请检查密钥是否配置正确`
+          content: `❌ 功能清单提取失败: ${error.message}\n\n请检查密钥是否配置正确`
         }]);
       }
     } finally {
       setIsLoading(false);
+      setIsExtractingFunctions(false);
     }
+  };
+
+  // 阶段2：基于确认的功能清单进行ERWX拆分
+  const startSplitFromFunctionList = async () => {
+    const selectedFunctions = confirmedFunctions.filter(fn => fn.selected);
+
+    if (selectedFunctions.length === 0) {
+      showToast('请至少选择一个功能进行拆分');
+      return;
+    }
+
+    setShowFunctionListPanel(false);
+    setIsLoading(true);
+    setTableData([]);
+
+    let allTableData = [];
+    let round = 1;
+    // 批次大小与后端一致为8，增加备用轮次确保所有功能都被拆分
+    const maxRounds = Math.ceil(selectedFunctions.length / 8) + 3;
+
+    try {
+      setMessages(prev => [...prev, {
+        role: 'system',
+        content: `🚀 **阶段2：ERWX拆分**\n\n基于您确认的 **${selectedFunctions.length}** 个功能进行拆分...\n\n✓ 功能清单已确认\n✓ 开始生成ERWX子过程`
+      }]);
+
+      while (round <= maxRounds) {
+        const uniqueFunctions = [...new Set(allTableData.map(r => r.functionalProcess).filter(Boolean))];
+
+        setMessages(prev => {
+          const filtered = prev.filter(m => !m.content.startsWith('🔄'));
+          return [...filtered, {
+            role: 'system',
+            content: `🔄 **拆分进度** - 第 ${round} 轮\n已完成 ${uniqueFunctions.length}/${selectedFunctions.length} 个功能过程...`
+          }];
+        });
+
+        const response = await axios.post('/api/split-from-function-list', {
+          documentContent: documentContent,
+          confirmedFunctions: selectedFunctions,
+          previousResults: allTableData,
+          round: round
+        });
+
+        if (response.data.success) {
+          const reply = response.data.reply;
+
+          if (!reply.includes('[ALL_DONE]')) {
+            setMessages(prev => [...prev, {
+              role: 'assistant',
+              content: reply
+            }]);
+
+            // 解析表格数据
+            try {
+              const tableRes = await axios.post('/api/parse-table', { markdown: reply });
+              if (tableRes.data.success && tableRes.data.tableData.length > 0) {
+                const newRows = tableRes.data.tableData;
+                const deduplicatedNewData = deduplicateByFunctionalProcess(allTableData, newRows);
+                if (deduplicatedNewData.length > 0) {
+                  allTableData = [...allTableData, ...deduplicatedNewData];
+                  setTableData(allTableData);
+                  console.log(`功能清单拆分第 ${round} 轮新增 ${deduplicatedNewData.length} 条数据`);
+                }
+              }
+            } catch (parseError) {
+              console.log(`功能清单拆分第 ${round} 轮表格解析失败:`, parseError.message);
+            }
+          }
+
+          if (response.data.isDone) {
+            const uniqueFunctions = [...new Set(allTableData.map(r => r.functionalProcess).filter(Boolean))];
+            setMessages(prev => {
+              const filtered = prev.filter(m => !m.content.startsWith('🔄'));
+              return [...filtered, {
+                role: 'system',
+                content: `✅ **拆分完成！**
+
+共生成 **${uniqueFunctions.length}** 个功能过程，**${allTableData.length}** 个子过程（CFP点数）
+
+数据移动类型分布：
+- 输入(E): ${allTableData.filter(r => r.dataMovementType === 'E').length}
+- 读取(R): ${allTableData.filter(r => r.dataMovementType === 'R').length}
+- 写入(W): ${allTableData.filter(r => r.dataMovementType === 'W').length}
+- 输出(X): ${allTableData.filter(r => r.dataMovementType === 'X').length}
+
+点击"查看表格"或"导出Excel"查看完整结果。`
+              }];
+            });
+            break;
+          }
+
+          round++;
+        } else {
+          throw new Error(response.data.error || '拆分失败');
+        }
+      }
+    } catch (error) {
+      console.error('功能清单拆分失败:', error);
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: `❌ 拆分失败: ${error.message}`
+      }]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // 添加新功能到确认列表
+  const addNewFunction = () => {
+    const newId = `custom_${Date.now()}`;
+    setConfirmedFunctions(prev => [...prev, {
+      id: newId,
+      name: '新功能',
+      triggerType: '用户触发',
+      description: '',
+      moduleName: '自定义',
+      selected: true,
+      isNew: true
+    }]);
+  };
+
+  // 更新功能信息
+  const updateFunction = (id, field, value) => {
+    setConfirmedFunctions(prev => prev.map(fn =>
+      fn.id === id ? { ...fn, [field]: value } : fn
+    ));
+  };
+
+  // 切换功能选中状态
+  const toggleFunctionSelection = (id) => {
+    setConfirmedFunctions(prev => prev.map(fn =>
+      fn.id === id ? { ...fn, selected: !fn.selected } : fn
+    ));
+  };
+
+  // 删除功能
+  const removeFunction = (id) => {
+    setConfirmedFunctions(prev => prev.filter(fn => fn.id !== id));
   };
 
   // 统一的分析入口
@@ -1253,6 +1396,20 @@ ${breakdownSummary}
                 <span>三层分析框架</span>
               </button>
             </div>
+
+            {/* 确认功能清单按钮 - 当有待确认的功能时显示 */}
+            {confirmedFunctions.length > 0 && (
+              <button
+                onClick={() => setShowFunctionListPanel(true)}
+                className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium bg-amber-100 text-amber-700 hover:bg-amber-200 rounded-lg transition-all animate-pulse"
+              >
+                <CheckCircle className="w-4 h-4" />
+                <span>确认功能清单</span>
+                <span className="bg-amber-500 text-white text-xs px-1.5 py-0.5 rounded-full">
+                  {confirmedFunctions.filter(fn => fn.selected).length}
+                </span>
+              </button>
+            )}
 
             {/* 查看表格按钮 */}
             <button
@@ -1962,6 +2119,143 @@ ${breakdownSummary}
           </div>
         </div>
       )}
+
+      {/* 功能清单确认面板 */}
+      {showFunctionListPanel && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+            {/* 面板标题 */}
+            <div className="p-6 border-b border-gray-200 flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                  <CheckCircle className="w-6 h-6 text-amber-500" />
+                  确认功能清单
+                </h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  请确认以下功能是否正确，您可以添加、删除或修改功能
+                </p>
+              </div>
+              <button
+                onClick={() => setShowFunctionListPanel(false)}
+                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+
+            {/* 功能列表 */}
+            <div className="flex-1 overflow-auto p-6">
+              <div className="space-y-3">
+                {confirmedFunctions.map((fn, idx) => (
+                  <div
+                    key={fn.id || idx}
+                    className={`p-4 rounded-xl border-2 transition-all ${fn.selected
+                      ? 'border-amber-300 bg-amber-50'
+                      : 'border-gray-200 bg-gray-50 opacity-60'
+                      }`}
+                  >
+                    <div className="flex items-start gap-4">
+                      {/* 选中复选框 */}
+                      <input
+                        type="checkbox"
+                        checked={fn.selected}
+                        onChange={() => toggleFunctionSelection(fn.id)}
+                        className="mt-1.5 w-5 h-5 text-amber-500 rounded focus:ring-amber-400"
+                      />
+
+                      {/* 功能信息 */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-2">
+                          {fn.isNew ? (
+                            <input
+                              type="text"
+                              value={fn.name}
+                              onChange={(e) => updateFunction(fn.id, 'name', e.target.value)}
+                              className="flex-1 px-3 py-1.5 border border-amber-300 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-amber-400"
+                              placeholder="输入功能名称"
+                            />
+                          ) : (
+                            <span className="font-medium text-gray-800">{fn.name}</span>
+                          )}
+                          <span className={`px-2 py-0.5 rounded text-xs font-medium ${fn.triggerType === '时钟触发'
+                            ? 'bg-blue-100 text-blue-700'
+                            : fn.triggerType === '接口触发'
+                              ? 'bg-purple-100 text-purple-700'
+                              : 'bg-green-100 text-green-700'
+                            }`}>
+                            {fn.triggerType || '用户触发'}
+                          </span>
+                          <span className="px-2 py-0.5 rounded text-xs bg-gray-200 text-gray-600">
+                            {fn.moduleName || '未分类'}
+                          </span>
+                        </div>
+                        {fn.description && (
+                          <p className="text-sm text-gray-500">{fn.description}</p>
+                        )}
+                        {fn.interval && (
+                          <p className="text-xs text-blue-600 mt-1">⏰ 执行间隔: {fn.interval}</p>
+                        )}
+                      </div>
+
+                      {/* 删除按钮 */}
+                      <button
+                        onClick={() => removeFunction(fn.id)}
+                        className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                        title="删除此功能"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* 添加新功能按钮 */}
+              <button
+                onClick={addNewFunction}
+                className="mt-4 w-full p-4 border-2 border-dashed border-gray-300 rounded-xl text-gray-500 hover:border-amber-400 hover:text-amber-600 hover:bg-amber-50 transition-all flex items-center justify-center gap-2"
+              >
+                <Plus className="w-5 h-5" />
+                添加新功能
+              </button>
+            </div>
+
+            {/* 底部操作栏 */}
+            <div className="p-6 border-t border-gray-200 flex items-center justify-between">
+              <div className="text-sm text-gray-500">
+                已选择 <span className="font-bold text-amber-600">{confirmedFunctions.filter(fn => fn.selected).length}</span> / {confirmedFunctions.length} 个功能
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setShowFunctionListPanel(false)}
+                  className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                >
+                  稍后确认
+                </button>
+                <button
+                  onClick={() => {
+                    setConfirmedFunctions([]);
+                    setFunctionList(null);
+                    setShowFunctionListPanel(false);
+                  }}
+                  className="px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                >
+                  清空列表
+                </button>
+                <button
+                  onClick={startSplitFromFunctionList}
+                  disabled={confirmedFunctions.filter(fn => fn.selected).length === 0}
+                  className="px-6 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2 font-medium"
+                >
+                  <Zap className="w-4 h-4" />
+                  确认并开始拆分
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Toast提示 */}
       {toastMessage && (
         <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 z-50 animate-fade-in">

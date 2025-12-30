@@ -87,8 +87,64 @@ function getGroqClient() {
 
 // 引入增强版提示词
 const { ENHANCED_COSMIC_SYSTEM_PROMPT } = require('./enhanced-prompts');
-// 引入三层分析框架API
-const { threeLayerAnalyze } = require('./three-layer-api');
+// 引入三层分析框架API（含两阶段动态驱动分析）
+const { threeLayerAnalyze, getActiveClientConfig, extractFunctionList, splitFromFunctionList } = require('./three-layer-api');
+
+// 通用AI调用助手 (集成Gemini和其他提供商)
+async function callAIChat(options) {
+  const { messages, temperature = 0.7, max_tokens = 8000, stream = false, res = null } = options;
+
+  const clientConfig = getActiveClientConfig();
+  if (!clientConfig) {
+    throw new Error('请先配置API密钥（支持Gemini, 智谱, OpenRouter等）');
+  }
+
+  const { client, model, useGeminiSDK, useGroqSDK } = clientConfig;
+
+  if (useGeminiSDK) {
+    if (stream && res) {
+      // Gemini SDK 流式调用
+      const fullPrompt = messages.map(m => `${m.role === 'system' ? 'SYSTEM' : 'USER'}: ${m.content}`).join('\n\n');
+      const result = await client.generateContentStream(fullPrompt);
+      for await (const chunk of result.stream) {
+        const text = chunk.text();
+        res.write(`data: ${JSON.stringify({ content: text })}\n\n`);
+      }
+      return null;
+    } else {
+      // Gemini SDK 非流式
+      const fullPrompt = messages.map(m => `${m.role === 'system' ? 'SYSTEM' : 'USER'}: ${m.content}`).join('\n\n');
+      const result = await client.generateContent(fullPrompt);
+      const response = await result.response;
+      const text = response.text();
+      return {
+        choices: [{ message: { content: text } }],
+        usage: { total_tokens: 0 }
+      };
+    }
+  } else {
+    // OpenAI 兼容 SDK (智谱, OpenRouter, Groq 等)
+    const completion = await client.chat.completions.create({
+      model,
+      messages,
+      temperature,
+      max_tokens,
+      stream
+    });
+
+    if (stream && res) {
+      for await (const chunk of completion) {
+        const content = chunk.choices[0]?.delta?.content || '';
+        if (content) {
+          res.write(`data: ${JSON.stringify({ content })}\n\n`);
+        }
+      }
+      return null;
+    }
+    return completion;
+  }
+}
+
 
 // Cosmic拆分系统提示词 - 融合Gemini四阶段方法论
 const COSMIC_SYSTEM_PROMPT = `你是一个顶级COSMIC分析专家与业务架构师。你的任务是运用四阶段方法论，将线性文档重构为"立体"的功能模型，确保输出的功能过程超越简单的增删改查（CRUD），具备极高的实战价值与物理层面的唯一性。
@@ -240,7 +296,8 @@ const COSMIC_SYSTEM_PROMPT = `你是一个顶级COSMIC分析专家与业务架�
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
-    hasApiKey: !!process.env.OPENAI_API_KEY,
+    hasApiKey: !!(process.env.OPENAI_API_KEY || process.env.GEMINI_API_KEY || process.env.ZHIPU_API_KEY || process.env.GROQ_API_KEY),
+    provider: process.env.THREE_LAYER_PROVIDER || 'auto',
     baseUrl: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1'
   });
 });
@@ -328,17 +385,6 @@ app.post('/api/chat', async (req, res) => {
   try {
     const { messages, documentContent } = req.body;
 
-    const client = getOpenAIClient();
-    if (!client) {
-      return res.status(400).json({ error: '请先配置API密钥' });
-    }
-
-    // 构建消息
-    const systemMessage = {
-      role: 'system',
-      content: COSMIC_SYSTEM_PROMPT
-    };
-
     const chatMessages = [systemMessage];
 
     // 如果有文档内容，添加到上下文
@@ -354,11 +400,9 @@ app.post('/api/chat', async (req, res) => {
       chatMessages.push(...messages);
     }
 
-    const completion = await client.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'gpt-4o',
+    const completion = await callAIChat({
       messages: chatMessages,
-      temperature: 0.7,
-      max_tokens: 8000
+      temperature: 0.7
     });
 
     const reply = completion.choices[0].message.content;
@@ -374,21 +418,13 @@ app.post('/api/chat', async (req, res) => {
   }
 });
 
+
 // 流式AI对话 - 增强版：支持后续要求生成cosmic并同步到表格
 app.post('/api/chat/stream', async (req, res) => {
   try {
     const { messages, documentContent, existingTableData = [], generateCosmic = false, userGuidelines = '' } = req.body;
 
-    console.log('收到流式对话请求，文档长度:', documentContent?.length || 0, '生成COSMIC:', generateCosmic, userGuidelines ? `用户指导：${userGuidelines}` : '');
-
-    const client = getOpenAIClient();
-    if (!client) {
-      console.error('API客户端未初始化');
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.write(`data: ${JSON.stringify({ error: '请先配置API密钥' })}\n\n`);
-      res.end();
-      return;
-    }
+    console.log('收到流式对话请求，文档长度:', documentContent?.length || 0, '生成COSMIC:', generateCosmic);
 
     // 设置SSE响应头
     res.setHeader('Content-Type', 'text/event-stream');
@@ -396,10 +432,9 @@ app.post('/api/chat/stream', async (req, res) => {
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
 
-    // 根据是否需要生成COSMIC选择不同的系统提示
     const systemMessage = {
       role: 'system',
-      content: generateCosmic ? COSMIC_SYSTEM_PROMPT : COSMIC_SYSTEM_PROMPT
+      content: COSMIC_SYSTEM_PROMPT
     };
 
     const chatMessages = [systemMessage];
@@ -412,7 +447,6 @@ app.post('/api/chat/stream', async (req, res) => {
       });
     }
 
-    // 如果有已存在的表格数据，告知AI避免重复
     if (existingTableData && existingTableData.length > 0) {
       const existingFunctions = [...new Set(existingTableData.map(r => r.functionalProcess).filter(Boolean))];
       if (existingFunctions.length > 0) {
@@ -424,7 +458,6 @@ app.post('/api/chat/stream', async (req, res) => {
     }
 
     if (messages && messages.length > 0) {
-      // 检查最后一条用户消息，如果包含特定关键词，自动增强为COSMIC生成请求
       const lastUserMsg = messages[messages.length - 1];
       if (lastUserMsg && lastUserMsg.role === 'user') {
         const userContent = lastUserMsg.content || '';
@@ -432,13 +465,10 @@ app.post('/api/chat/stream', async (req, res) => {
         const shouldGenerateCosmic = cosmicKeywords.some(kw => userContent.toLowerCase().includes(kw));
 
         if (shouldGenerateCosmic) {
-          // 增强用户请求，明确要求生成COSMIC表格
           const enhancedMessages = messages.slice(0, -1);
           enhancedMessages.push({
             role: 'user',
-            content: `${userContent}\n\n**重要**：请根据上述要求，生成对应的COSMIC功能过程拆分表格（Markdown格式）。
-表格必须包含：功能用户、触发事件、功能过程、子过程描述、数据移动类型、数据组、数据属性。
-每个功能过程必须包含E（入口）、R/W（读写）、X（出口）子过程。`
+            content: `${userContent}\n\n**重要**：请根据上述要求，生成对应的COSMIC功能过程拆分表格（Markdown格式）。`
           });
           chatMessages.push(...enhancedMessages);
         } else {
@@ -449,34 +479,16 @@ app.post('/api/chat/stream', async (req, res) => {
       }
     }
 
-    console.log('调用AI API，模型:', process.env.OPENAI_MODEL || 'glm-4-flash');
-    console.log('消息数量:', chatMessages.length);
-
-    const stream = await client.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'glm-4-flash',
+    await callAIChat({
       messages: chatMessages,
-      temperature: 0.7,
-      max_tokens: 8000,
-      stream: true
+      stream: true,
+      res
     });
 
-    let totalContent = '';
-    for await (const chunk of stream) {
-      const content = chunk.choices[0]?.delta?.content || '';
-      if (content) {
-        totalContent += content;
-        res.write(`data: ${JSON.stringify({ content })}\n\n`);
-      }
-    }
-
-    console.log('AI响应完成，总长度:', totalContent.length);
     res.write('data: [DONE]\n\n');
     res.end();
   } catch (error) {
     console.error('流式对话失败:', error.message);
-    console.error('错误详情:', error);
-
-    // 确保响应头已设置
     if (!res.headersSent) {
       res.setHeader('Content-Type', 'text/event-stream');
     }
@@ -490,12 +502,8 @@ app.post('/api/continue-analyze', async (req, res) => {
   try {
     const { documentContent, previousResults = [], round = 1, targetFunctions = 30, understanding = null, userGuidelines = '' } = req.body;
 
-    const client = getOpenAIClient();
-    if (!client) {
-      return res.status(400).json({ error: '请先配置API密钥' });
-    }
-
     // 构建已完成的功能过程列表
+
     const completedFunctions = previousResults.map(r => r.functionalProcess).filter(Boolean);
     const uniqueCompleted = [...new Set(completedFunctions)];
 
@@ -655,15 +663,14 @@ ${uniqueCompleted.slice(0, 30).join('、')}${uniqueCompleted.length > 30 ? '...'
 
     console.log(`数量优先第 ${round} 轮分析开始，已完成 ${uniqueCompleted.length} 个功能过程，已有 ${uniqueSubProcessDescs.length} 个子过程描述...`);
 
-    const completion = await client.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'glm-4-flash',
+    const completion = await callAIChat({
       messages: [
         systemMessage,
         { role: 'user', content: userPrompt }
       ],
-      temperature: 0.5, // 降低温度以提高一致性和减少重复
-      max_tokens: 8000
+      temperature: 0.5
     });
+
 
     const reply = completion.choices[0].message.content;
     console.log(`数量优先第 ${round} 轮完成，响应长度: ${reply.length}`);
@@ -722,12 +729,8 @@ app.post('/api/quality-continue-analyze', async (req, res) => {
   try {
     const { documentContent, previousResults = [], round = 1, targetFunctions = 30, understanding = null, userGuidelines = '' } = req.body;
 
-    const client = getOpenAIClient();
-    if (!client) {
-      return res.status(400).json({ error: '请先配置API密钥' });
-    }
-
     // 构建已完成的功能过程列表
+
     const completedFunctions = previousResults.map(r => r.functionalProcess).filter(Boolean);
     const uniqueCompleted = [...new Set(completedFunctions)];
 
@@ -975,15 +978,14 @@ ${uniqueCompleted.slice(0, 30).join('、')}${uniqueCompleted.length > 30 ? '...'
 
     console.log(`质量优先 - 第 ${round} 轮分析开始，已完成 ${uniqueCompleted.length} 个功能过程...`);
 
-    const completion = await client.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'glm-4-flash',
+    const completion = await callAIChat({
       messages: [
         systemMessage,
         { role: 'user', content: userPrompt }
       ],
-      temperature: 0.5,
-      max_tokens: 8000
+      temperature: 0.5
     });
+
 
     const reply = completion.choices[0].message.content;
     console.log(`质量优先 - 第 ${round} 轮完成，响应长度: ${reply.length}`);
@@ -1073,12 +1075,8 @@ app.post('/api/quality-analyze/understand', async (req, res) => {
   try {
     const { documentContent, imageDescriptions = [], userGuidelines = '' } = req.body;
 
-    const client = getOpenAIClient();
-    if (!client) {
-      return res.status(400).json({ error: '请先配置API密钥' });
-    }
-
     console.log('质量优先分析 - 第一阶段：深度理解文档（增强版）...', userGuidelines ? `用户指导：${userGuidelines}` : '');
+
 
     // 构建图片描述上下文
     let imageContext = '';
@@ -1126,69 +1124,33 @@ ${imageContext}
 1. **预审准入**：参数校验、身份鉴权、格式验证、前置条件检查
 2. **主体执行**：核心数据处理、业务逻辑运算、状态转换
 3. **异步反馈**：结果通知、回调同步、消息推送、事件发布
-4. **历史追踪**：审计日志生成、操作快照备份、版本记录
+4. **审计追踪**：操作日志、快照备份、版本记录
 
 ### 横向（管理轴）- 专项管理维度拆解
-挖掘文档中的"隐藏需求"，自动识别管理底座功能：
-1. **归因维度**：追溯操作来源、记录操作路径
-2. **资产更新维度**：变更资产状态、更新资源配置
-3. **效能统计维度**：性能指标采集、业务数据汇总
-4. **合规审计维度**：权限验证、操作审计、数据脱敏
+1. **归因维度**：追溯来源、记录路径
+2. **资产维度**：变更状态、锁定资源
+3. **效能维度**：指标采集、数据汇总
+4. **合规维度**：操作审计、数据脱敏
 
-### 深度（颗粒度）- 字段级切片
-对复杂接口进行字段级拆解：
-- 每一个核心字段（状态码、时间戳、流水号）都可能映射到独立的功能过程
-- 负向与异常路径：驳回、撤回、挂起、超时、接口超限拦截、格式非法过滤
-
-## 原子化字段池构建（Field Pool）
-扫描全文，建立全面的字段池，为后续去重做准备：
-
-**业务字段**（锚定字段候选）：
-- 标识类：ID、SN号、编码、序列号
-- 业务类：设备类型、任务类型、订单状态、告警等级
-- 位置类：经纬度、地址、区域
-- 时间类：创建时间、更新时间、执行时间
-
-**管理字段**（辅助字段候选）：
-- 操作类：操作人ID、操作人名称、操作来源
-- 追踪类：流水号、事务ID、版本号
-- 状态类：处理状态、审核状态、同步状态
-- 技术类：时间戳、重试次数、错误代码、冲突标记位
-
-## 功能过程扩容策略
-运用【7状态扩容法】，将简单动词派生出深度状态：
-- 基础动作：创建、查询、修改、删除
-- 扩容状态：预查、执行、审核、校对、转存、归档、异常重试、补发
-
-# ═══════════════════════════════════════════════════════════
-# 输出要求
-# ═══════════════════════════════════════════════════════════
-
-    请输出JSON格式的分析结果（必须包含字段池和锚定字段）：
+## 请输出以下JSON格式的分析报告（严禁输出任何多余文字）：
+{
+  "projectName": "项目名称",
+  "projectDescription": "项目核心目标简述",
+  "systemArchitecture": "系统类型（如：微服务、单体、嵌入式）",
+  "systemBoundary": "系统的外部边界说明",
+  "userRoles": ["角色1", "角色2"],
+  "dataEntities": ["实体1", "实体2"],
+  "externalInterfaces": ["外部接口1", "外部接口2"],
+  "functionBreakdown": {
+     "userTriggeredFunctions": 0,
+     "timerTriggeredFunctions": 0,
+     "interfaceTriggeredFunctions": 0
+  },
+  "coreModules": [
     {
-      "projectName": "项目名称",
-        "projectDescription": "项目简述",
-          "systemArchitecture": "3D架构描述（流程轴、管理轴、深度轴的分布）",
-            "systemBoundary": "系统边界说明",
-              "userRoles": ["角色1", "角色2"],
-                "dataEntities": ["实体1", "实体2"],
-                  "externalInterfaces": ["接口1", "接口2"],
-                    "fieldPool": {
-        "businessFields": ["设备ID", "设备SN", "设备类型", "告警等级", "经纬度", "..."],
-          "managementFields": ["操作人ID", "时间戳", "流水号", "版本号", "重试次数", "错误代码", "..."]
-      },
-      "coreModules": [
+      "moduleName": "模块名称",
+      "estimatedFunctions": [
         {
-          "moduleName": "模块名称",
-          "moduleDescription": "模块描述",
-          "subModules": ["子模块1", "子模块2"],
-          "estimatedFunctions": [
-            {
-              "functionName": "功能名称（Object+Action+State格式）",
-              "triggerType": "用户触发/时钟触发/接口触发",
-              "scenario": "使用场景描述",
-              "anchorField": "该功能的锚定核心字段（从fieldPool.businessFields中选择）",
-              "suggestedAttributes": "建议的字段组合（包含锚定字段+辅助字段，确保与其他功能互斥）"
             }
           ]
         }
@@ -1222,8 +1184,7 @@ ${imageContext}
     4. 功能名称必须符合Object + Action + State格式
     5. 必须区分三种触发类型，并统计数量`;
 
-    const completion = await client.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'glm-4-flash',
+    const completion = await callAIChat({
       messages: [
         { role: 'system', content: '你是一个需求分析专家，擅长从需求文档中提取结构化信息。请只输出JSON格式，不要有其他文字。' },
         { role: 'user', content: understandPrompt }
@@ -1231,6 +1192,7 @@ ${imageContext}
       temperature: 0.3,
       max_tokens: 4000
     });
+
 
     let analysisResult;
     try {
@@ -1274,12 +1236,8 @@ app.post('/api/quality-analyze/split', async (req, res) => {
   try {
     const { documentContent, understanding, moduleIndex = 0, previousResults = [] } = req.body;
 
-    const client = getOpenAIClient();
-    if (!client) {
-      return res.status(400).json({ error: '请先配置API密钥' });
-    }
-
     const modules = understanding?.coreModules || [];
+
     if (moduleIndex >= modules.length) {
       return res.json({
         success: true,
@@ -1320,18 +1278,16 @@ ${uniqueCompleted.length > 0 ? `## 已完成的功能过程（请勿重复）\n$
 
 请输出Markdown表格格式：
 
-|功能用户|触发事件|功能过程|子过程描述|数据移动类型|数据组|数据属性|
-|:---|:---|:---|:---|:---|:---|:---|`;
+|功能用户|触发事件|功能过程|子过程描述|数据移动类型|数据组|数据属性|`;
 
-    const completion = await client.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'glm-4-flash',
+    const completion = await callAIChat({
       messages: [
         { role: 'system', content: QUALITY_FIRST_SYSTEM_PROMPT },
         { role: 'user', content: splitPrompt }
       ],
-      temperature: 0.5,
-      max_tokens: 8000
+      temperature: 0.5
     });
+
 
     const reply = completion.choices[0].message.content;
     console.log(`模块 ${currentModule.moduleName} 拆分完成，响应长度: ${reply.length}`);
@@ -1356,12 +1312,8 @@ app.post('/api/quality-analyze/review', async (req, res) => {
   try {
     const { documentContent, understanding, tableData } = req.body;
 
-    const client = getOpenAIClient();
-    if (!client) {
-      return res.status(400).json({ error: '请先配置API密钥' });
-    }
-
     console.log('质量优先分析 - 第三阶段：质量审查...');
+
 
     // 统计当前功能过程
     const uniqueFunctions = [...new Set(tableData.map(r => r.functionalProcess).filter(Boolean))];
@@ -1397,15 +1349,14 @@ ${uniqueFunctions.length < expectedCount * 0.7 ? `
 
 请输出需要补充的功能过程（Markdown表格格式），如果无需补充请回复"[REVIEW_DONE]"。`;
 
-    const completion = await client.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'glm-4-flash',
+    const completion = await callAIChat({
       messages: [
         { role: 'system', content: QUALITY_FIRST_SYSTEM_PROMPT },
         { role: 'user', content: reviewPrompt }
       ],
-      temperature: 0.5,
-      max_tokens: 8000
+      temperature: 0.5
     });
+
 
     const reply = completion.choices[0].message.content;
     const isDone = reply.includes('[REVIEW_DONE]') || reply.includes('无需补充') || reply.includes('已完整');
@@ -1429,6 +1380,17 @@ ${uniqueFunctions.length < expectedCount * 0.7 ? `
 // ========== 三层分析框架模式 API（使用智谱API） ==========
 app.post('/api/three-layer-analyze', (req, res) => {
   threeLayerAnalyze(req, res, getOpenAIClient);
+});
+
+// ========== 两阶段动态驱动分析 API ==========
+// 阶段1：提取功能清单（让用户确认、修改、补充）
+app.post('/api/extract-function-list', (req, res) => {
+  extractFunctionList(req, res);
+});
+
+// 阶段2：基于确认的功能清单进行ERWX拆分
+app.post('/api/split-from-function-list', (req, res) => {
+  splitFromFunctionList(req, res);
 });
 
 // 导出Excel
@@ -1561,14 +1523,9 @@ function fillEmptyCells(tableData) {
 // AI智能去重 - 分析前面数据组内容，结合子过程关键字生成新名称
 // 例如："用户信息" 重复时，根据子过程"删除用户"生成 "用户信息删除表"
 async function aiGenerateUniqueName(originalName, subProcessDesc, functionalProcess, existingNames) {
-  const client = getOpenAIClient();
-  if (!client) {
-    // 如果没有API，使用本地提取方式
-    return generateUniqueNameLocal(originalName, subProcessDesc);
-  }
-
   try {
     const prompt = `你是一个数据命名专家。现在有一个数据组/数据属性名称"${originalName}"与已有名称重复。
+
 
 上下文信息：
 - 功能过程：${functionalProcess}
@@ -1589,14 +1546,13 @@ async function aiGenerateUniqueName(originalName, subProcessDesc, functionalProc
 - 原名称"告警记录"，子过程"写入告警处理结果" -> 告警处理结果记录
 - 原名称"订单信息"，子过程"查询历史订单" -> 历史订单查询信息`;
 
-    const completion = await client.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'glm-4-flash',
+    const completion = await callAIChat({
       messages: [{ role: 'user', content: prompt }],
-      temperature: 0.3,
-      max_tokens: 50
+      temperature: 0.3
     });
 
     const newName = completion.choices[0].message.content.trim();
+
     // 清理可能的多余内容，包括【】括号及其内容
     const cleanName = newName
       .replace(/["'\n\r]/g, '')
@@ -2390,6 +2346,130 @@ app.post('/api/parse-table', async (req, res) => {
       return text;
     };
 
+    // 🔧 清洗数据属性：将英文字段名转为中文，将英文逗号转为顿号
+    const cleanDataAttributes = (attrs = '') => {
+      if (!attrs) return '';
+
+      // 英文字段名到中文的映射
+      const fieldMapping = {
+        // 标识类
+        'cell_id': '小区标识', 'cellid': '小区标识', 'CELL_ID': '小区标识',
+        'gNBId': '基站编号', 'gnbid': '基站编号', 'gNB_ID': '基站编号',
+        'task_id': '任务编号', 'taskid': '任务编号', 'TASK_ID': '任务编号',
+        'user_id': '用户编号', 'userid': '用户编号', 'USER_ID': '用户编号',
+        'request_id': '请求标识', 'requestid': '请求标识', 'REQUEST_ID': '请求标识',
+        'node_id': '节点编号', 'nodeid': '节点编号', 'NODE_ID': '节点编号', 'NODEB_ID': '基站编号',
+        'scene_name': '场景名称', 'scenename': '场景名称', 'SCENE_NAME': '场景名称',
+
+        // 网络相关
+        'DU_me_moid': '设备标识', 'du_me_moid': '设备标识',
+        'NR_PHYSICAL_CELL_DU_ID': '物理小区标识', 'nr_physical_cell_du_id': '物理小区标识',
+        'gNBIdLength': '基站编号长度', 'gnbidlength': '基站编号长度',
+        'CGI': '小区全局标识', 'cgi': '小区全局标识',
+        'NGI': '网络全局标识', 'ngi': '网络全局标识',
+        'TCP_POOR_RT': 'TCP差比率', 'tcp_poor_rt': 'TCP差比率',
+        'TCP_POOR_SESN_CNT': 'TCP差会话数', 'tcp_poor_sesn_cnt': 'TCP差会话数',
+        'DL_SESN_DUR': '下行会话时长', 'dl_sesn_dur': '下行会话时长',
+        'UL_SESN_DUR': '上行会话时长', 'ul_sesn_dur': '上行会话时长',
+        'DL_RTT_LAT': '下行时延', 'dl_rtt_lat': '下行时延',
+        'UL_RTT_LAT': '上行时延', 'ul_rtt_lat': '上行时延',
+        'DL_DATA_MB': '下行数据量', 'dl_data_mb': '下行数据量',
+        'UL_DATA_MB': '上行数据量', 'ul_data_mb': '上行数据量',
+        'TOTAL_SESN_CNT': '总会话数', 'total_sesn_cnt': '总会话数',
+        'AVG_TCP_RET_DATA': '平均TCP重传', 'avg_tcp_ret_data': '平均TCP重传',
+        'TCP_ESTB_ACK_LAT': 'TCP建链确认时延', 'tcp_estb_ack_lat': 'TCP建链确认时延',
+        'TCP_ESTB_RSP_LAT': 'TCP建链响应时延', 'tcp_estb_rsp_lat': 'TCP建链响应时延',
+        'SESN_ACK_FIR_DAT_LAT': '首包确认时延', 'sesn_ack_fir_dat_lat': '首包确认时延',
+        'UL_SESN_RATE_KBPS': '上行会话速率', 'ul_sesn_rate_kbps': '上行会话速率',
+        'DL_SESN_RATE_KBPS': '下行会话速率', 'dl_sesn_rate_kbps': '下行会话速率',
+        'AVG_TCP_ORD_PKT_CNT': '平均有序包数', 'avg_tcp_ord_pkt_cnt': '平均有序包数',
+        'AVG_TCP_LST_PKT_CNT': '平均丢包数', 'avg_tcp_lst_pkt_cnt': '平均丢包数',
+        'UDP_SESN_CNT': 'UDP会话数', 'udp_sesn_cnt': 'UDP会话数',
+
+        // 时间类
+        'create_time': '创建时间', 'createtime': '创建时间', 'CREATE_TIME': '创建时间',
+        'update_time': '更新时间', 'updatetime': '更新时间', 'UPDATE_TIME': '更新时间',
+        'start_time': '开始时间', 'starttime': '开始时间', 'START_TIME': '开始时间',
+        'end_time': '结束时间', 'endtime': '结束时间', 'END_TIME': '结束时间',
+        'timestamp': '时间戳', 'TIMESTAMP': '时间戳',
+
+        // 状态类
+        'status': '状态', 'STATUS': '状态',
+        'state': '状态', 'STATE': '状态',
+        'flag': '标志', 'FLAG': '标志',
+
+        // 通用类
+        'name': '名称', 'NAME': '名称',
+        'type': '类型', 'TYPE': '类型',
+        'count': '数量', 'COUNT': '数量',
+        'total': '总计', 'TOTAL': '总计',
+        'vendor': '厂商', 'VENDOR': '厂商',
+        'city': '城市', 'CITY': '城市',
+        'county': '区县', 'COUNTY': '区县',
+        'frequency': '频率', 'FREQUENCY': '频率',
+        'total_traffic_gb': '总流量', 'TOTAL_TRAFFIC_GB': '总流量',
+        'FILE_NAME': '文件名称', 'file_name': '文件名称',
+        'CELL_NAME': '小区名称', 'cell_name': '小区名称',
+      };
+
+      let cleaned = attrs;
+
+      // 1. 替换已知的英文字段名为中文
+      for (const [eng, chn] of Object.entries(fieldMapping)) {
+        const regex = new RegExp(`\\b${eng}\\b`, 'gi');
+        cleaned = cleaned.replace(regex, chn);
+      }
+
+      // 2. 将英文逗号替换为中文顿号
+      cleaned = cleaned.replace(/,\s*/g, '、');
+
+      // 3. 将 | 分隔符替换为顿号
+      cleaned = cleaned.replace(/\s*\|\s*/g, '、');
+
+      // 4. 清理多余的顿号
+      cleaned = cleaned.replace(/、+/g, '、');
+      cleaned = cleaned.replace(/^、|、$/g, '');
+
+      // 5. 截断过长的属性列表（最多保留8个字段）
+      const fields = cleaned.split('、').map(f => f.trim()).filter(f => f);
+      if (fields.length > 8) {
+        cleaned = fields.slice(0, 8).join('、');
+      }
+
+      return cleaned;
+    };
+
+    // 🔧 简化子过程描述（不超过15个字）
+    const simplifySubProcessDesc = (desc = '') => {
+      if (!desc || desc.length <= 15) return desc;
+
+      let simplified = desc
+        // 简化接收类描述
+        .replace(/接收.*?数据.*?[，,].*?生成.*/, (m) => {
+          const match = m.match(/接收(.{2,6}?).*?数据/);
+          return match ? `接收${match[1]}数据` : '接收请求数据';
+        })
+        // 简化读取类描述
+        .replace(/读取.*?相关.*?数据/, (m) => {
+          const match = m.match(/读取(.{2,8}?)(相关|基础|配置)/);
+          return match ? `读取${match[1]}数据` : '读取相关数据';
+        })
+        // 简化记录类描述
+        .replace(/记录.*?操作.*?日志/, '记录操作日志')
+        // 简化返回类描述
+        .replace(/返回.*?操作.*?结果/, '返回操作结果')
+        // 简化生成类描述
+        .replace(/生成.*?数据/, (m) => {
+          const match = m.match(/生成(.{2,6}?)数据/);
+          return match ? `生成${match[1]}数据` : '生成数据';
+        });
+
+      // 不再强制截断子过程描述，保留完整的业务语义
+      // 之前的截断会导致信息丢失和省略号问题
+
+      return simplified;
+    };
+
     const normalizeCells = (line) => {
       // 保留所有单元格，包括空的（用于合并单元格）
       const rawCells = line.split('|');
@@ -2573,6 +2653,12 @@ app.post('/api/parse-table', async (req, res) => {
           currentFunctionalProcess = sanitizeText(currentFunctionalProcess);
         }
         rowFunctionalProcess = sanitizeText(rowFunctionalProcess);
+
+        // 🔧 应用数据属性清洗（英文转中文、逗号转顿号、截断过长）
+        dataAttributes = cleanDataAttributes(dataAttributes);
+
+        // 🔧 简化子过程描述（不超过15个字）
+        subProcessDesc = simplifySubProcessDesc(subProcessDesc);
 
         // 如果数据组名称太简单（少于5个字符），自动补充功能过程关键词
         if (dataGroup && dataGroup.length < 5) {
@@ -2834,8 +2920,19 @@ if (fs.existsSync(CLIENT_DIST_PATH)) {
 // 启动服务器（带端口占用重试）
 function startServer(port, retries = 5) {
   const server = app.listen(port, () => {
+    const hasGemini = !!process.env.GEMINI_API_KEY;
+    const hasOpenAI = !!process.env.OPENAI_API_KEY;
+    const hasZhipu = !!process.env.ZHIPU_API_KEY;
+    const hasGroq = !!process.env.GROQ_API_KEY;
+
+    let status = '未配置';
+    if (hasGemini) status = '已配置 (Gemini)';
+    else if (hasZhipu) status = '已配置 (智谱)';
+    else if (hasOpenAI) status = '已配置 (OpenAI)';
+    else if (hasGroq) status = '已配置 (Groq)';
+
     console.log(`🚀 Cosmic拆分智能体服务器运行在 http://localhost:${port}`);
-    console.log(`📋 API密钥状态: ${process.env.OPENAI_API_KEY ? '已配置' : '未配置'}`);
+    console.log(`📋 API密钥状态: ${status}`);
     if (fs.existsSync(CLIENT_DIST_PATH)) {
       console.log('🖥️  静态前端: 已启用 client/dist 产物');
     }

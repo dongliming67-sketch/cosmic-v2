@@ -118,7 +118,7 @@ echo [4/4] 🚀 启动应用服务...
 echo.
 echo ┌────────────────────────────────────────────────────────────┐
 echo │  服务启动中，请稍候...                                     │
-echo │  后端服务: http://localhost:3002                           │
+echo │  后端服务: http://localhost:3001                           │
 echo │  前端服务: http://localhost:5173                           │
 echo │                                                            │
 echo │  💡 提示: 按 Ctrl+C 可停止服务                             │
