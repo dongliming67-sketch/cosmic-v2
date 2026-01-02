@@ -971,13 +971,16 @@ ${breakdownSummary}
           setConfirmedFunctions(allFunctions);
           setShowFunctionListPanel(true);
 
+          // 使用实际识别的功能数量，而不是AI预估的数量，确保显示一致
+          const actualFunctionCount = allFunctions.length;
+
           setMessages(prev => [...prev, {
             role: 'assistant',
             content: `## ✅ 功能清单提取完成！
 
 **项目名称**：${extractedList.projectName || '未识别'}
 
-**识别到 ${extractedList.totalFunctions || allFunctions.length} 个功能点**
+**识别到 ${actualFunctionCount} 个功能点**
 
 请点击上方的 **"确认功能清单"** 按钮查看和编辑功能列表：
 - ✏️ 可以**删除**不需要的功能
@@ -987,10 +990,31 @@ ${breakdownSummary}
 确认后将开始ERWX拆分。`
           }]);
         } else {
-          // 如果解析失败，显示原始响应
+          // 如果解析失败，显示原始响应并提供重试选项
+          console.log('功能清单解析失败，原始响应:', response.data.rawResponse?.substring(0, 500));
+          console.log('解析详情:', response.data.parseDetails);
+          
+          // 构建详细的错误信息
+          let errorDetail = '';
+          if (response.data.parseDetails) {
+            const details = response.data.parseDetails;
+            errorDetail = '\n\n**解析尝试详情：**\n';
+            details.attempts.forEach((attempt, idx) => {
+              if (attempt.error) {
+                errorDetail += `${idx + 1}. ${attempt.method}: ❌ ${attempt.error}\n`;
+              } else if (attempt.found === false) {
+                errorDetail += `${idx + 1}. ${attempt.method}: ⚠️ 未找到\n`;
+              } else if (attempt.found === true) {
+                errorDetail += `${idx + 1}. ${attempt.method}: ✓ 已找到但解析失败\n`;
+              } else if (attempt.started) {
+                errorDetail += `${idx + 1}. ${attempt.method}: 已尝试但未成功\n`;
+              }
+            });
+          }
+          
           setMessages(prev => [...prev, {
             role: 'assistant',
-            content: `## 📋 功能分析结果\n\n${response.data.rawResponse}\n\n⚠️ 自动解析失败，请手动复制上述功能列表。`
+            content: `## 📋 AI分析结果\n\n${response.data.rawResponse.substring(0, 1000)}${response.data.rawResponse.length > 1000 ? '\n\n...(完整内容请查看控制台)' : ''}\n\n---\n\n⚠️ **自动解析失败**\n\n系统尝试了多种解析策略但均未成功。${errorDetail}\n\n**可能的原因：**\n- AI返回的JSON格式不规范\n- 响应中包含了额外的说明文字\n- 网络传输过程中数据异常\n\n**建议操作：**\n1. 🔄 点击"重新分析"按钮重试（AI可能会返回不同格式）\n2. 🔧 检查后端控制台日志，查看详细的解析错误\n3. 📝 如果持续失败，请联系技术支持并提供上述AI响应内容`
           }]);
         }
       } else {
@@ -1030,13 +1054,15 @@ ${breakdownSummary}
 
     let allTableData = [];
     let round = 1;
-    // 批次大小与后端一致为8，增加备用轮次确保所有功能都被拆分
-    const maxRounds = Math.ceil(selectedFunctions.length / 8) + 3;
+    // 批次大小与后端保持一致（10个），计算总批次数
+    const batchSize = 10;
+    const totalBatches = Math.ceil(selectedFunctions.length / batchSize);
+    const maxRounds = totalBatches + 3; // 额外加3轮作为保险
 
     try {
       setMessages(prev => [...prev, {
         role: 'system',
-        content: `🚀 **阶段2：ERWX拆分**\n\n基于您确认的 **${selectedFunctions.length}** 个功能进行拆分...\n\n✓ 功能清单已确认\n✓ 开始生成ERWX子过程`
+        content: `🚀 **阶段2：ERWX拆分**\n\n基于您确认的 **${selectedFunctions.length}** 个功能进行拆分...\n\n✓ 功能清单已确认\n✓ 采用分批处理模式（每批${batchSize}个功能）\n✓ 预计需要 ${totalBatches} 个批次\n✓ 开始生成ERWX子过程`
       }]);
 
       while (round <= maxRounds) {
@@ -1046,7 +1072,7 @@ ${breakdownSummary}
           const filtered = prev.filter(m => !m.content.startsWith('🔄'));
           return [...filtered, {
             role: 'system',
-            content: `🔄 **拆分进度** - 第 ${round} 轮\n已完成 ${uniqueFunctions.length}/${selectedFunctions.length} 个功能过程...`
+            content: `🔄 **拆分进度**\n\n批次: ${Math.min(round, totalBatches)}/${totalBatches}\n已完成功能: ${uniqueFunctions.length}/${selectedFunctions.length}\n子过程数: ${allTableData.length}\n\n正在处理中...`
           }];
         });
 
@@ -1059,6 +1085,11 @@ ${breakdownSummary}
 
         if (response.data.success) {
           const reply = response.data.reply;
+
+          // 显示本批处理的功能
+          if (response.data.currentBatchFunctions && response.data.currentBatchFunctions.length > 0) {
+            console.log(`第${round}轮处理的功能:`, response.data.currentBatchFunctions);
+          }
 
           if (!reply.includes('[ALL_DONE]')) {
             setMessages(prev => [...prev, {
@@ -1075,7 +1106,19 @@ ${breakdownSummary}
                 if (deduplicatedNewData.length > 0) {
                   allTableData = [...allTableData, ...deduplicatedNewData];
                   setTableData(allTableData);
-                  console.log(`功能清单拆分第 ${round} 轮新增 ${deduplicatedNewData.length} 条数据`);
+                  
+                  // 显示本批处理的功能和实际拆分出的功能
+                  const newFunctions = [...new Set(deduplicatedNewData.map(r => r.functionalProcess))];
+                  console.log(`第${round}轮: 预期处理 ${response.data.currentBatch} 个功能，实际拆出 ${newFunctions.length} 个功能`);
+                  console.log('实际拆出的功能:', newFunctions);
+                  
+                  if (response.data.currentBatchFunctions && newFunctions.length < response.data.currentBatchFunctions.length) {
+                    console.warn('⚠️ 部分功能未拆分:', 
+                      response.data.currentBatchFunctions.filter(name => 
+                        !newFunctions.some(fn => fn.includes(name) || name.includes(fn))
+                      )
+                    );
+                  }
                 }
               }
             } catch (parseError) {
@@ -1085,19 +1128,25 @@ ${breakdownSummary}
 
           if (response.data.isDone) {
             const uniqueFunctions = [...new Set(allTableData.map(r => r.functionalProcess).filter(Boolean))];
+            const batchInfo = response.data.totalBatches ? `\n完成批次: ${response.data.totalBatches}/${response.data.totalBatches}` : '';
             setMessages(prev => {
               const filtered = prev.filter(m => !m.content.startsWith('🔄'));
               return [...filtered, {
                 role: 'system',
-                content: `✅ **拆分完成！**
+                content: `✅ **拆分完成！**${batchInfo}
 
-共生成 **${uniqueFunctions.length}** 个功能过程，**${allTableData.length}** 个子过程（CFP点数）
+**结果统计：**
+- 功能过程数: **${uniqueFunctions.length}** / ${selectedFunctions.length} (应识别)
+- 子过程总数: **${allTableData.length}** (CFP点数)
+- 平均每功能: **${(allTableData.length / uniqueFunctions.length).toFixed(1)}** 个子过程
 
-数据移动类型分布：
-- 输入(E): ${allTableData.filter(r => r.dataMovementType === 'E').length}
-- 读取(R): ${allTableData.filter(r => r.dataMovementType === 'R').length}
-- 写入(W): ${allTableData.filter(r => r.dataMovementType === 'W').length}
-- 输出(X): ${allTableData.filter(r => r.dataMovementType === 'X').length}
+**数据移动类型分布：**
+- 输入(E): ${allTableData.filter(r => r.dataMovementType === 'E').length} 个
+- 读取(R): ${allTableData.filter(r => r.dataMovementType === 'R').length} 个
+- 写入(W): ${allTableData.filter(r => r.dataMovementType === 'W').length} 个
+- 输出(X): ${allTableData.filter(r => r.dataMovementType === 'X').length} 个
+
+${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能未完全拆分，请检查结果' : '✓ 所有功能已拆分完成'}
 
 点击"查看表格"或"导出Excel"查看完整结果。`
               }];

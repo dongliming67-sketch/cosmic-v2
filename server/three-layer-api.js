@@ -738,11 +738,149 @@ function cleanupAIResponse(reply) {
 }
 
 // ═══════════════════════════════════════════════════════════
+// 🔧 文档智能分块处理
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * 将大文档按语义分块，确保每块都有完整的上下文
+ * @param {string} content - 原始文档内容
+ * @param {number} maxChunkSize - 每块最大字符数（默认6000）
+ * @returns {Array} 分块结果数组
+ */
+function smartChunkDocument(content, maxChunkSize = 6000) {
+  const chunks = [];
+  
+  // 如果文档较小，直接返回
+  if (content.length <= maxChunkSize) {
+    return [{ content, chunkIndex: 0, totalChunks: 1, isComplete: true }];
+  }
+  
+  console.log(`\n${'='.repeat(60)}`);
+  console.log(`📄 文档分块处理开始`);
+  console.log(`文档总长度: ${content.length} 字符`);
+  console.log(`每块大小: ${maxChunkSize} 字符`);
+  
+  // 尝试按章节分割（识别常见的章节标记）
+  const sectionPatterns = [
+    /\n#+\s+.+/g,  // Markdown标题
+    /\n第[一二三四五六七八九十\d]+[章节部分].+/g,  // 中文章节
+    /\n\d+[\.、]\s+.+/g,  // 数字标题
+    /\n[一二三四五六七八九十]+[、．].+/g  // 中文数字标题
+  ];
+  
+  let sections = [];
+  for (const pattern of sectionPatterns) {
+    const matches = [...content.matchAll(pattern)];
+    if (matches.length > 2) {  // 至少找到3个章节标记才认为有效
+      sections = matches;
+      console.log(`识别到 ${sections.length} 个章节标记`);
+      break;
+    }
+  }
+  
+  if (sections.length > 0) {
+    // 按章节分块
+    let lastIndex = 0;
+    for (let i = 0; i < sections.length; i++) {
+      const currentSection = sections[i];
+      const nextSection = sections[i + 1];
+      
+      const start = lastIndex;
+      const end = nextSection ? nextSection.index : content.length;
+      const sectionContent = content.substring(start, end);
+      
+      // 如果单个章节过大，需要进一步拆分
+      if (sectionContent.length > maxChunkSize) {
+        const subChunks = splitLargeSection(sectionContent, maxChunkSize);
+        chunks.push(...subChunks);
+      } else {
+        chunks.push({ content: sectionContent, size: sectionContent.length });
+      }
+      
+      lastIndex = currentSection.index;
+    }
+  } else {
+    // 没有明显章节，按段落智能分割
+    console.log('未识别到章节标记，按段落智能分割');
+    const paragraphs = content.split(/\n\n+/);
+    let currentChunk = '';
+    
+    for (const para of paragraphs) {
+      if (currentChunk.length + para.length > maxChunkSize && currentChunk.length > 0) {
+        chunks.push({ content: currentChunk, size: currentChunk.length });
+        currentChunk = para;
+      } else {
+        currentChunk += (currentChunk ? '\n\n' : '') + para;
+      }
+    }
+    
+    if (currentChunk) {
+      chunks.push({ content: currentChunk, size: currentChunk.length });
+    }
+  }
+  
+  // 为每个分块添加元数据
+  const totalChunks = chunks.length;
+  const result = chunks.map((chunk, index) => ({
+    content: chunk.content,
+    chunkIndex: index,
+    totalChunks: totalChunks,
+    size: chunk.size || chunk.content.length,
+    isComplete: false
+  }));
+  
+  // 添加重叠区域，确保不漏掉边界功能
+  for (let i = 0; i < result.length - 1; i++) {
+    const overlapSize = 500;  // 重叠500字符
+    const currentContent = result[i].content;
+    const nextContent = result[i + 1].content;
+    
+    // 将下一块的开头加到当前块的结尾
+    result[i].overlapNext = nextContent.substring(0, Math.min(overlapSize, nextContent.length));
+  }
+  
+  console.log(`文档已分为 ${totalChunks} 块`);
+  result.forEach((chunk, i) => {
+    console.log(`  块${i + 1}: ${chunk.size} 字符${chunk.overlapNext ? ' (含重叠)' : ''}`);
+  });
+  console.log('='.repeat(60) + '\n');
+  
+  return result;
+}
+
+/**
+ * 拆分过大的单个章节
+ */
+function splitLargeSection(sectionContent, maxSize) {
+  const chunks = [];
+  const sentences = sectionContent.split(/([。！？\n]+)/);
+  let currentChunk = '';
+  
+  for (let i = 0; i < sentences.length; i += 2) {
+    const sentence = sentences[i] + (sentences[i + 1] || '');
+    if (currentChunk.length + sentence.length > maxSize && currentChunk.length > 0) {
+      chunks.push({ content: currentChunk, size: currentChunk.length });
+      currentChunk = sentence;
+    } else {
+      currentChunk += sentence;
+    }
+  }
+  
+  if (currentChunk) {
+    chunks.push({ content: currentChunk, size: currentChunk.length });
+  }
+  
+  return chunks;
+}
+
+// ═══════════════════════════════════════════════════════════
 // 阶段1：功能清单提取（动态驱动 - 让AI真正理解文档）
+// - 支持大文档分块处理
+// - 支持多轮迭代思考
 // ═══════════════════════════════════════════════════════════
 async function extractFunctionList(req, res) {
   try {
-    const { documentContent } = req.body;
+    const { documentContent, enableChunking = true, maxIterations = 3 } = req.body;
 
     if (!documentContent) {
       return res.status(400).json({ error: '请提供文档内容' });
@@ -754,36 +892,574 @@ async function extractFunctionList(req, res) {
     }
 
     const { client, model, useGeminiSDK, useGroqSDK, provider } = clientConfig;
+    
+    console.log(`\n${'='.repeat(80)}`);
+    console.log(`🚀 功能清单提取开始`);
+    console.log(`文档长度: ${documentContent.length} 字符`);
+    console.log(`分块处理: ${enableChunking ? '启用' : '禁用'}`);
+    console.log(`最大迭代: ${maxIterations} 轮`);
+    console.log(`AI提供商: ${provider}`);
+    console.log('='.repeat(80) + '\n');
+    
+    // 判断是否需要分块处理
+    const needChunking = enableChunking && documentContent.length > 8000;
+    
+    if (needChunking) {
+      // 大文档分块处理
+      console.log('📄 检测到大文档，启动分块处理模式...');
+      const functionList = await extractFromLargeDocument(
+        documentContent,
+        clientConfig,
+        maxIterations
+      );
+      
+      return res.json({
+        success: true,
+        functionList,
+        provider,
+        mode: 'chunked',
+        totalChunks: functionList._metadata?.totalChunks || 0
+      });
+    }
+    
+    // 小文档直接处理（保持原有逻辑）
+    console.log('📄 文档大小适中，使用标准处理模式...');
 
-    // 功能清单提取专用提示词 - 聚焦于理解文档，不做ERWX拆分
-    const extractionPrompt = `你是一个专业的软件需求分析师。请仔细阅读以下文档，提取出所有的功能点。
+    // 功能清单提取专用提示词 - 极致细粒度拆分版本
+    const extractionPrompt = `你是一个COSMIC功能点分析专家。你的任务是按照**最细粒度**拆分出文档中的所有功能。
 
-# 任务目标
-从文档中识别所有功能点（功能过程），并以结构化列表形式呈现，让用户可以确认、修改或补充。
+# 🚨🚨🚨 绝对禁止的错误（违反者必须重新识别！）
 
-# 分析步骤
+**❌ 禁止泛化表达！以下是严重错误示例：**
+- ❌ "数据业务画像生成" → 太泛化！必须明确：生成什么数据？画像包含哪些指标？
+- ❌ "数据业务可视化展示" → 太泛化！必须明确：展示什么数据？用什么图表？
+- ❌ "数据业务智能体交互" → 太泛化！必须明确：交互什么内容？什么方式交互？
+- ❌ "周粒度业务感知可视化分析基础指标汇总情况统计" → 太长太复杂！必须拆分为多个独立功能
+- ❌ "数据查询" → 太泛化！必须明确：查询什么数据？
+- ❌ "数据导出" → 太泛化！必须明确：导出什么数据？
+- ❌ "报表生成" → 太泛化！必须明确：生成什么报表？
 
-## 第一步：通读文档
-- 理解业务背景和系统边界
-- 识别主要业务模块/子系统
-- 理解用户角色和触发场景
+**❌ 禁止复合操作！必须拆分为独立功能：**
+- ❌ "生成华为小区业务感知健康度评估表-日数据" → 必须拆分为2个功能：
+  - ✅ "华为小区业务感知健康度日数据评估"（评估/计算操作）
+  - ✅ "华为小区业务感知健康度评估表生成"（生成表格操作）
+- ❌ "统计并生成用户报表" → 必须拆分为2个功能：
+  - ✅ "用户数据统计"
+  - ✅ "用户统计报表生成"
+- ❌ "查询并导出数据" → 必须拆分为2个功能：
+  - ✅ "XXX数据查询"
+  - ✅ "XXX数据Excel导出"
+- ❌ "分析并可视化展示" → 必须拆分为2个功能：
+  - ✅ "XXX数据分析"
+  - ✅ "XXX分析结果折线图展示"
 
-## 第二步：识别功能点
-对于每个功能，识别：
-- **功能名称**：动词+业务对象（如"创建飞行任务"、"华为小区用户数5分钟汇总"）
+**✅ 正确的具体化示例：**
+- ✅ "华为小区用户数日汇总数据查询"（明确：厂商+数据对象+时间粒度+操作）
+- ✅ "中兴基站流量5分钟汇总Excel导出"（明确：厂商+数据对象+时间粒度+格式+操作）
+- ✅ "爱立信小区负荷率柱状图可视化展示"（明确：厂商+数据对象+指标+图表类型）
+- ✅ "用户数趋势折线图查看"（明确：数据对象+图表类型）
+- ✅ "日汇总数据定时任务配置"（明确：时间粒度+操作类型）
+
+**🎯 功能名称必须包含的要素（至少3个）：**
+1. **数据对象**：用户数/流量/小区/基站/告警/配置（必须明确）
+2. **操作动作**：查询/导出/导入/统计/汇总/展示/配置/删除/修改（必须明确，且只能一个操作）
+3. **限定条件**：厂商/时间粒度/数据格式/图表类型（至少一个）
+
+**⚠️ 一个功能只能包含一个操作动词！**
+如果功能描述中出现"并"、"和"、"然后"等连接词，说明包含多个操作，必须拆分！
+
+# 🚨🚨🚨 最高原则：
+1. **组合爆炸式拆分，禁止合并！**
+2. **一个功能只能做一件事（单一职责）！**
+3. **多个操作必须拆分为多个功能！**
+
+## 核心规则（必须遵守！）
+
+**规则1：厂商×操作×数据 = 独立功能**
+- ❌ 错误：识别1个"小区用户数汇总"
+- ✅ 正确：识别N个独立功能
+  - 华为小区用户数汇总
+  - 中兴小区用户数汇总  
+  - 爱立信小区用户数汇总
+  
+**规则2：时间粒度×操作 = 独立功能**
+- ❌ 错误：识别1个"数据汇总"
+- ✅ 正确：识别N个独立功能
+  - 5分钟汇总
+  - 小时汇总
+  - 日汇总
+  - 周汇总
+  - 月汇总
+
+**规则3：数据对象×操作 = 独立功能**
+- ❌ 错误：识别1个"数据查询"
+- ✅ 正确：识别N个独立功能
+  - 用户数查询
+  - 流量数据查询
+  - 小区数据查询
+  - 基站数据查询
+
+**规则4：每个操作都要拆分（查询、导入、导出、汇总、统计）**
+如果文档提到某类数据，必须检查是否有以下操作，每个都是独立功能：
+- ①数据查询 ②数据导入 ③数据导出 ④数据汇总 ⑤数据统计 ⑥数据分析
+
+**规则5：绝对禁止合并！**
+- ❌ 禁止：把"华为数据导入、中兴数据导入"合并为"数据导入"
+- ❌ 禁止：把"5分钟汇总、小时汇总"合并为"数据汇总"
+- ✅ 必须：每个维度组合都单独列出
+
+**规则6：界面元素必须识别为功能！**
+- 文档中的每个"按钮"、"链接"、"跳转"都对应一个功能
+- 示例：文档提到"点击小区名跳转到详情页" → 识别为"小区详情查看"功能
+- 示例：文档提到"导出按钮" → 识别为"数据导出"功能
+- 示例：文档提到"支持筛选" → 识别为"条件筛选"功能
+
+**规则7：隐含功能必须挖掘！**
+- 如果提到"展示列表"，通常隐含：①数据查询功能 ②列表展示功能
+- 如果提到"数据统计"，通常隐含：①原始数据查询 ②统计计算 ③结果展示
+- 如果提到"报表生成"，通常隐含：①数据汇总 ②报表生成 ③报表导出
+
+## 💡 笛卡尔积拆分思维（极其重要！）
+
+如果文档提到：
+- 3个厂商：华为、中兴、爱立信
+- 4种操作：查询、导入、导出、汇总
+- 2种数据：用户数、流量
+
+**则必须识别 = 3 × 4 × 2 = 24 个功能！**
+
+具体列表：
+1. 华为用户数查询
+2. 华为用户数导入
+3. 华为用户数导出
+4. 华为用户数汇总
+5. 华为流量查询
+6. 华为流量导入
+7. 华为流量导出
+8. 华为流量汇总
+9. 中兴用户数查询
+10. 中兴用户数导入
+... (依此类推到24个)
+
+## 📊 拆分示例矩阵
+
+**场景1：小区数据管理**
+如果文档提到"小区数据查询和导出"，并且有华为、中兴两个厂商：
+
+| 厂商 | 操作 | 功能名称 |
+|------|------|----------|
+| 华为 | 查询 | 华为小区数据查询 |
+| 华为 | 导出 | 华为小区数据导出 |
+| 中兴 | 查询 | 中兴小区数据查询 |
+| 中兴 | 导出 | 中兴小区数据导出 |
+
+**总计：4个功能**
+
+**场景2：数据汇总任务**
+如果文档提到"用户数汇总"，并且有5分钟、小时、日三种粒度：
+
+| 时间粒度 | 功能名称 |
+|----------|----------|
+| 5分钟 | 用户数5分钟汇总 |
+| 小时 | 用户数小时汇总 |
+| 日 | 用户数日汇总 |
+
+**总计：3个功能**
+
+**场景3：组合维度拆分**
+如果文档提到"华为和中兴的小区用户数5分钟和小时汇总"：
+
+| 厂商 | 时间粒度 | 功能名称 |
+|------|----------|----------|
+| 华为 | 5分钟 | 华为小区用户数5分钟汇总 |
+| 华为 | 小时 | 华为小区用户数小时汇总 |
+| 中兴 | 5分钟 | 中兴小区用户数5分钟汇总 |
+| 中兴 | 小时 | 中兴小区用户数小时汇总 |
+
+**总计：4个功能** (2厂商 × 2粒度)
+
+## ⛔ 绝对禁止的错误做法
+
+**错误示例1：合并厂商**
+- ❌ 错：识别1个"小区数据查询（支持华为、中兴）"
+- ✅ 对：识别2个"华为小区数据查询" + "中兴小区数据查询"
+
+**错误示例2：合并操作**
+- ❌ 错：识别1个"用户数据管理（查询、导出）"
+- ✅ 对：识别2个"用户数查询" + "用户数导出"
+
+**错误示例3：合并粒度**
+- ❌ 错：识别1个"数据汇总任务（多粒度）"
+- ✅ 对：识别5个"5分钟汇总" + "小时汇总" + "日汇总" + "周汇总" + "月汇总"
+
+# ═══════════════════════════════════════════════════════════
+# 18种超级深度功能挖掘策略（必须逐一应用！）
+# ═══════════════════════════════════════════════════════════
+
+⚠️ **重要**：你必须按顺序应用以下所有策略，每个策略都可能识别出新功能！
+
+## 策略1：动词扫描法
+扫描文档中所有动词，每个动词+业务对象=一个潜在功能：
+- 创建、新增、添加 → XXX创建
+- 查询、搜索、筛选 → XXX查询
+- 修改、更新、编辑 → XXX修改
+- 删除、移除、清除 → XXX删除
+- 导入、上传、接收 → XXX导入
+- 导出、下载、生成 → XXX导出
+- 统计、汇总、计算 → XXX统计
+- 推送、发送、通知 → XXX推送
+- 监控、检测、预警 → XXX监控
+
+## 策略2：界面功能说明拆分
+当文档描述"支持XXX功能"时，必须拆分为独立功能：
+- "支持查询、导出功能" → ①XXX查询 ②XXX导出（2个功能！）
+- "支持增删改查" → ①创建 ②删除 ③修改 ④查询（4个功能！）
+- "支持批量操作" → 单独列出批量版本
+
+## 策略3：厂商维度全拆分（极重要！）
+文档中每提到一个厂商，所有跟该厂商相关的操作都要单独列出：
+
+**如果文档提到：**
+- 华为、中兴、爱立信三个厂商
+- 每个厂商有：数据查询、数据导入、数据导出、数据汇总
+
+**则必须识别 = 3厂商 × 4操作 = 12个功能：**
+1. 华为数据查询
+2. 华为数据导入
+3. 华为数据导出
+4. 华为数据汇总
+5. 中兴数据查询
+6. 中兴数据导入
+7. 中兴数据导出
+8. 中兴数据汇总
+9. 爱立信数据查询
+10. 爱立信数据导入
+11. 爱立信数据导出
+12. 爱立信数据汇总
+
+## 策略4：时间粒度全拆分（极重要！）
+文档中每提到一个时间粒度，所有跟该粒度相关的操作都要单独列出：
+
+**如果文档提到：**
+- 5分钟、小时、日、周、月 5种粒度
+- 每种粒度有：数据汇总、数据统计、报表生成
+
+**则必须识别 = 5粒度 × 3操作 = 15个功能：**
+1. 5分钟数据汇总
+2. 5分钟数据统计
+3. 5分钟报表生成
+4. 小时数据汇总
+5. 小时数据统计
+... (依此类推到15个)
+
+## 策略5：数据对象全拆分（极重要！）
+文档中每提到一个数据对象，所有跟该对象相关的操作都要单独列出：
+
+**如果文档提到：**
+- 用户数、流量、小区、基站 4种数据
+- 每种数据有：查询、导入、导出
+
+**则必须识别 = 4数据对象 × 3操作 = 12个功能：**
+1. 用户数查询
+2. 用户数导入
+3. 用户数导出
+4. 流量查询
+5. 流量导入
+6. 流量导出
+7. 小区数据查询
+8. 小区数据导入
+9. 小区数据导出
+10. 基站数据查询
+11. 基站数据导入
+12. 基站数据导出
+
+## 策略6：触发方式维度识别
+识别所有触发方式：
+- 用户触发：点击按钮、提交表单
+- 时钟触发：定时任务、周期执行
+- 接口触发：外部系统调用、数据推送
+- 事件触发：状态变更触发、阈值触发
+
+## 策略7：辅助功能必须识别
+以下功能通常被遗漏，必须单独识别：
+- **数据导出**：Excel导出、PDF导出、报表导出
+- **数据导入**：批量导入、模板导入
+- **条件查询**：按时间查询、按条件筛选
+- **统计分析**：数量统计、趋势分析
+- **告警推送**：短信通知、消息推送
+
+## 策略8：定时任务专项识别
+扫描以下关键词，识别定时任务：
+- "每X分钟"、"定时"、"周期"、"自动"
+- "日汇总"、"月报表"、"定期清理"
+
+## 策略9：数据接入层功能
+识别所有数据接入方式：
+- 文件接收（FTP、本地上传）
+- 接口对接（API调用、消息队列）
+- 手动导入（Excel上传）
+
+## 策略10：数据分发层功能
+识别所有数据输出方式：
+- 页面展示（列表、图表、大屏）
+- 文件导出（Excel、PDF、CSV）
+- 接口推送（对接其他系统）
+- 消息通知（短信、邮件、站内信）
+
+## 策略11：管理支撑功能
+识别系统管理类功能：
+- 配置管理（参数配置、规则配置）
+- 权限管理（用户管理、角色管理）
+- 日志管理（操作日志查询）
+
+## 策略12：界面元素系统性扫描（新增！）
+逐个扫描文档中提到的每个界面元素，每个元素都可能对应功能：
+- **按钮**："提交"按钮 → 数据提交功能
+- **链接**："查看详情"链接 → 详情查看功能
+- **下拉框**："选择地市"下拉框 → 地市筛选功能
+- **输入框**："输入关键词"输入框 → 关键词搜索功能
+- **日期选择器**："选择日期"控件 → 日期范围查询功能
+- **复选框**："全选"复选框 → 批量选择功能
+- **表格列**：可点击的表头 → 排序功能
+
+## 策略13：表格字段功能识别（新增！）
+每个表格都包含多个隐藏功能：
+- **表格名称本身** → 该表数据查询/展示功能
+- **表格有导出按钮** → 该表数据导出功能
+- **表格有查询条件** → 每个查询条件都是筛选功能的一部分
+- **表格可点击行** → 详情查看功能
+- **表格有分页** → 分页查询功能（可合并到查询功能）
+- **表格有操作列（编辑/删除）** → 对应的修改/删除功能
+
+## 策略14：数据流转功能识别（新增！）
+追踪数据的完整生命周期：
+- **数据接收** → 每种数据源（文件、接口、手工）都是独立功能
+- **数据解析** → 如果文档提到解析，单独列为功能
+- **数据验证** → 如果提到校验，单独列为功能
+- **数据转换** → 如果提到格式转换，单独列为功能
+- **数据存储** → 入库操作（通常隐含在其他功能中）
+- **数据检索** → 查询功能
+- **数据输出** → 导出、推送、展示等
+
+## 策略15：批量操作功能识别（新增！）
+单个操作和批量操作要分别识别：
+- 如果文档提到"批量XXX"，单独列为一个功能
+- 示例：既有"数据导入"，也要识别"批量数据导入"
+- 示例：既有"数据删除"，也要识别"批量数据删除"
+
+## 策略16：条件组合功能识别（新增！）
+查询条件的每种组合都应细化：
+- 如果查询条件有5个（日期、地市、区县、厂商、指标）
+- 不仅要识别"XXX查询"功能
+- 还要确认是否有"高级筛选"或"组合查询"作为独立功能
+
+## 策略17：隐藏的CRUD功能识别（新增！）
+系统性检查每个业务对象的增删改查：
+- 如果文档提到某个"表"或"数据"
+- 检查是否有：①创建 ②查询 ③修改 ④删除 ⑤导出 ⑥导入
+- 即使文档只提到"管理"，也要拆分成多个具体功能
+- 示例："用户管理" → ①用户创建 ②用户查询 ③用户修改 ④用户删除 ⑤用户导出
+
+## 策略18：二次验证扫描（新增！）
+在识别完成后，重新扫描文档，检查是否遗漏：
+- 扫描所有**动词**（查询、导出、统计、生成、接收...）
+- 扫描所有**名词+动词组合**（数据+导出、报表+生成...）
+- 扫描所有**"支持""可以""能够"**后面的功能描述
+- 扫描所有**逗号、顿号分隔的功能列表**
+- 检查已识别功能数量，如果少于文档字数/200，说明遗漏严重
+
+## 策略19：页面/表格系统性识别（关键！）
+对于文档中每个提到的页面或表格，必须系统性识别：
+- **查询功能**：该页面/表格的数据查询
+- **导出功能**：如果提到"支持导出"或有导出按钮
+- **详情查看**：如果表格行可点击或有"查看详情"
+- **新增功能**：如果有"新增"、"添加"按钮
+- **修改功能**：如果有"编辑"、"修改"按钮
+- **删除功能**：如果有"删除"按钮
+示例：文档提到"用户管理页面" → 必须识别5个功能：①用户查询 ②用户新增 ③用户修改 ④用户删除 ⑤用户导出
+
+## 策略20：关键词触发识别（强制！）
+遇到以下关键词，强制识别对应功能：
+- "支持查询" → 必须有"XXX数据查询"功能
+- "支持导出" / "导出功能" → 必须有"XXX数据导出"功能
+- "点击跳转" / "跳转至" → 必须有"XXX详情查看"或"XXX跳转"功能
+- "定时" / "周期" / "自动" → 必须有"XXX定时任务"功能
+- "批量" → 如有"批量删除"，则删除功能要拆分为：单个删除 + 批量删除（2个）
+- "管理" → 必须拆分为至少4个功能：查询、新增、修改、删除
+
+# ═══════════════════════════════════════════════════════════
+# 功能识别输出要求
+# ═══════════════════════════════════════════════════════════
+
+对于每个功能，必须识别：
+- **功能名称**：[厂商/业务对象]+动词+[时间粒度]（如"华为小区用户数5分钟汇总"）
 - **触发方式**：用户触发 / 时钟触发 / 接口触发
 - **所属模块**：该功能属于哪个业务模块
 - **简要描述**：该功能做什么（一句话）
+- **涉及数据**：该功能处理的主要数据对象
 
-## 第三步：分类整理
-将功能按模块或触发方式分组呈现
+# ═══════════════════════════════════════════════════════════
+# 🚨🚨🚨 最重要！"功能界面说明"专项识别 🚨🚨🚨
+# ═══════════════════════════════════════════════════════════
 
-# 重要原则
-1. **只识别文档中明确描述的功能，不要臆造**
-2. **功能名称要具体**，避免"数据处理"这种笼统名称
-3. **如果涉及多厂家（华为/中兴等）或多业务类型，要分别列出**
-4. **定时任务要明确时间间隔**（如"5分钟汇总"而非"定时汇总"）
-5. **导入导出要明确数据对象**（如"预警记录导出"而非"数据导出"）
+文档中"功能界面说明"部分通常包含大量功能描述，这些功能**必须全部识别**！
+
+## 必须识别的功能类型：
+
+### 1. 查询功能（最常遗漏！）
+当文档描述"支持查询（条件1、条件2...）"时：
+- **必须识别为一个独立功能**："XXX数据查询"
+- 示例：文档写"支持查询（日期、地市、区县、场景名称）"
+  → 识别为："周粒度小区健康度数据查询"（用户触发）
+
+### 2. 导出功能（最常遗漏！）
+当文档描述"支持导出"或"导出功能"时：
+- **必须识别为一个独立功能**："XXX数据导出"
+- 示例：文档写"支持导出"
+  → 识别为："周粒度小区健康度数据导出"（用户触发）
+
+### 3. 跳转/详情查看功能（最常遗漏！）
+当文档描述"点击XXX，跳转到YYY"时：
+- **必须识别为一个独立功能**："XXX详情查看" 或 "跳转至YYY"
+- 示例：文档写"点击质差小区数，跳转至小区业务感知健康度&质差详情表-日"
+  → 识别为："质差小区详情跳转查看"（用户触发）
+- 示例：文档写"点击健康度总分，跳转至小区感知健康度综合评估表-日"
+  → 识别为："健康度综合评估详情查看"（用户触发）
+
+### 4. 统计/汇总功能
+当文档描述"统计XXX情况"时：
+- **必须识别为一个独立功能**
+- 示例：文档写"统计周粒度省市县场景级小区健康度&质差情况"
+  → 识别为："周粒度小区健康度统计分析"（时钟触发 或 用户触发）
+
+### 5. 列表展示功能
+当文档描述"上查询，下列表呈现"时：
+- 查询和列表展示可以合并为一个"XXX数据查询"功能
+
+## 🚨 绝对禁止遗漏的功能清单（扩展版）
+
+请在识别时，**逐字扫描**文档中的以下关键词，每出现一次都必须对应一个功能：
+
+| 关键词 | 必须识别的功能 | 示例 |
+|-------|--------------|------|
+| "管理" | 拆分为增删改查导出 | "用户管理"→5个功能 |
+| "支持查询" | XXX数据查询 | "支持按日期查询" |  
+| "支持导出" | XXX数据导出 | "支持导出Excel" |
+| "导出功能" | XXX数据导出 | "数据导出功能" |
+| "点击XXX跳转" | XXX详情查看/跳转 | "点击小区名跳转" |
+| "跳转至" | XXX详情查看/跳转 | "跳转至详情页" |
+| "统计" | XXX统计分析 | "统计用户数" |
+| "汇总" | XXX数据汇总 | "日汇总任务" |
+| "定时" / "每X分钟" | XXX定时任务 | "每5分钟执行" |
+| "导入" | XXX数据导入 | "文件导入" |
+| "上传" | XXX数据上传 | "上传配置文件" |
+| "下载" | XXX数据下载 | "下载模板" |
+| "筛选" | XXX数据筛选 | "按条件筛选" |
+| "排序" | XXX数据排序 | "按时间排序" |
+| "展示" | XXX数据展示 | "图表展示" |
+| "呈现" | XXX数据呈现 | "列表呈现" |
+| "推送" | XXX消息推送 | "告警推送" |
+| "通知" | XXX消息通知 | "短信通知" |
+| "配置" | XXX参数配置 | "规则配置" |
+| "设置" | XXX参数设置 | "阈值设置" |
+| "生成" | XXX报表生成 | "生成日报" |
+| "计算" | XXX数据计算 | "计算健康度" |
+| "分析" | XXX数据分析 | "趋势分析" |
+| "监控" | XXX状态监控 | "性能监控" |
+| "预警" | XXX异常预警 | "阈值预警" |
+
+# ✅🚨 最终检查清单（输出前必须逐项核对！）
+
+**🚨 泛化检查（最重要！违规必须重做！）：**
+逐个检查每个功能名称，确保：
+- [ ] ❌ 是否有"数据业务XXX"这样的泛化表达？（必须改为具体数据对象）
+- [ ] ❌ 是否有只写"数据"而不说明具体是什么数据？（必须明确：用户数/流量/小区/基站）
+- [ ] ❌ 是否有只写"可视化"而不说明用什么图表？（必须明确：柱状图/折线图/饼图）
+- [ ] ❌ 是否有只写"展示"而不说明展示什么？（必须明确展示对象和方式）
+- [ ] ❌ 是否有功能名称超过15个字？（必须拆分为多个功能）
+- [ ] ✅ 每个功能名称是否都包含：数据对象+操作动作+限定条件？
+- [ ] ✅ 功能数量是否≥20个？（如果<20个，说明拆分不够细！）
+
+**基础检查：**
+- [ ] 文档中"功能界面说明"部分的每个功能是否都已识别？
+- [ ] 文档中"支持查询"是否已识别为查询功能？
+- [ ] 文档中"支持导出"是否已识别为导出功能？
+- [ ] 文档中所有"点击XXX跳转"是否都已识别为跳转功能？
+- [ ] 文档中所有"定时/汇总"任务是否都已识别？
+
+**维度拆分检查：**
+- [ ] 不同厂商（华为/中兴/爱立信）的功能是否分开列出？
+- [ ] 不同时间粒度（5分钟/小时/日/周/月）的功能是否分开列出？
+- [ ] 不同数据对象（用户数/流量/小区/基站）的功能是否分开列出？
+- [ ] 不同操作类型（单个/批量）的功能是否分开列出？
+
+**完整性检查：**
+- [ ] 每个提到的"表"或"界面"是否都识别了：查询、导出、详情查看功能？
+- [ ] 每个提到的"管理"功能是否拆分为：增、删、改、查、导出？
+- [ ] 所有按钮、链接、下拉框等界面元素对应的功能是否都已识别？
+- [ ] 识别的功能总数是否≥文档字数/200？（粗略估算，字数多应该功能也多）
+- [ ] 是否检查了文档中用逗号、顿号分隔的功能列表？
+
+**二次验证：**
+- [ ] 重新快速浏览文档，看是否还有遗漏的动词（查、增、删、改、导、统计...）
+- [ ] 检查是否有"支持XXX、XXX、XXX"这样的多功能描述被拆分了
+- [ ] 确认功能数量：如果识别少于20个，很可能遗漏严重！
+
+# 🎯 功能命名模板（必须遵守！）
+
+**标准命名格式：[数据对象] + [操作动作] + [限定条件]**
+
+**示例1：查询类功能**
+- ✅ "小区用户数查询"（数据对象：小区用户数 + 操作：查询）
+- ✅ "华为基站流量查询"（限定：华为 + 数据对象：基站流量 + 操作：查询）
+- ✅ "5分钟汇总数据查询"（限定：5分钟汇总 + 数据对象：数据 + 操作：查询）
+
+**示例2：导出类功能**
+- ✅ "小区用户数Excel导出"（数据对象 + 格式 + 操作）
+- ✅ "华为基站告警CSV导出"（限定 + 数据对象 + 格式 + 操作）
+
+**示例3：可视化类功能**
+- ✅ "用户数趋势折线图展示"（数据对象 + 趋势 + 图表类型 + 操作）
+- ✅ "小区负荷率柱状图查看"（数据对象 + 指标 + 图表类型 + 操作）
+- ✅ "流量分布饼图可视化"（数据对象 + 分布 + 图表类型 + 操作）
+
+**示例4：定时任务**
+- ✅ "用户数5分钟汇总定时任务"（数据对象 + 时间粒度 + 操作 + 任务类型）
+- ✅ "华为小区数据日汇总定时任务"（限定 + 数据对象 + 时间粒度 + 操作 + 任务类型）
+
+**❌ 绝对禁止的错误命名（一旦出现必须立即修正）：**
+- ❌ "用户画像" → 必须拆分为：用户行为特征统计、用户属性分析、用户标签生成
+- ❌ "小区画像" → 必须拆分为：小区负荷率统计、小区用户数分析、小区流量特征分析
+- ❌ "业务画像" → 必须拆分为：业务类型统计、业务流量分析、业务用户分布分析
+- ❌ "数据可视化" → 必须拆分为：用户数折线图展示、流量柱状图展示、分布饼图展示
+- ❌ "首页展示" → 必须拆分为：关键指标展示、趋势图表展示、告警信息展示
+- ❌ "交互功能" → 必须拆分为：参数配置、数据查询、结果导出
+- ❌ "数据业务XXX" → 改为具体数据对象
+- ❌ "数据XXX" → 改为"用户数XXX"、"流量XXX"等
+- ❌ "可视化展示" → 改为"XX折线图展示"、"XX柱状图查看"
+- ❌ "智能体交互" → 改为"XX数据提交"、"XX参数配置"
+- ❌ "画像生成" → 改为"XX指标统计"、"XX特征分析"
+
+**🚫 严格禁止使用的词汇黑名单：**
+以下词汇绝对不能单独作为功能名称的主要部分：
+- "画像"（必须明确是什么指标/特征）
+- "可视化"（必须明确图表类型）
+- "交互"（必须明确交互什么）
+- "展示"（必须明确展示什么和用什么方式）
+- "数据"（必须明确具体数据对象）
+- "业务"（必须明确具体业务类型）
+- "生成"（必须明确生成什么）
+- "管理"（必须拆分为增删改查导）
+
+**🚫 严格禁止的复合操作连接词：**
+功能名称中出现以下词汇，说明包含多个操作，必须拆分：
+- "生成XXX表/报表" → 拆分为：数据计算/评估 + 表格生成
+- "统计并生成" → 拆分为：统计 + 生成
+- "查询并导出" → 拆分为：查询 + 导出
+- "分析并展示" → 拆分为：分析 + 展示
+- "评估并生成" → 拆分为：评估 + 生成
+- "计算并保存" → 拆分为：计算 + 保存
+- "汇总并推送" → 拆分为：汇总 + 推送
 
 # 输出格式
 请严格按照以下JSON格式输出：
@@ -792,31 +1468,40 @@ async function extractFunctionList(req, res) {
 {
   "projectName": "项目名称",
   "projectDescription": "项目描述（一句话）",
-  "totalFunctions": 15,
+  "totalFunctions": 50,  // ⚠️ 必须≥20，否则说明拆分不够细！
   "modules": [
     {
       "moduleName": "模块名称",
       "functions": [
         {
           "id": 1,
-          "name": "功能名称",
+          "name": "小区用户数查询",  // ⚠️ 必须具体，禁止泛化！
           "triggerType": "用户触发",
-          "description": "功能描述",
-          "dataObjects": ["涉及的数据对象1", "数据对象2"]
+          "description": "查询指定小区的用户数统计数据",
+          "dataObjects": ["小区用户数"]  // ⚠️ 必须具体到数据对象
         }
       ]
     }
   ],
   "timedTasks": [
     {
-      "name": "定时任务名称",
+      "name": "用户数5分钟汇总定时任务",  // ⚠️ 必须包含时间粒度
       "interval": "5分钟",
-      "description": "任务描述"
+      "description": "每5分钟汇总用户数数据"
     }
   ],
-  "suggestions": ["建议补充的功能1（如果文档暗示但未明确）"]
+  "suggestions": []
 }
 \`\`\`
+
+# 🚨🚨🚨 极其重要：输出格式要求 🚨🚨🚨
+
+1. **必须输出JSON格式**：你的回复必须是一个有效的JSON对象，包裹在 \`\`\`json 和 \`\`\` 之间
+2. **不要输出任何解释文字**：直接输出JSON，不要在JSON前后添加任何说明
+3. **确保JSON格式正确**：
+   - 所有字符串必须用双引号
+   - 数组最后一个元素后不要加逗号
+   - 确保所有括号正确闭合
 
 ---
 
@@ -826,7 +1511,7 @@ ${documentContent}
 
 ---
 
-请仔细分析上述文档，提取所有功能点。`;
+**请直接输出JSON格式的功能清单（不要输出任何其他内容）：**`;
 
     console.log(`功能清单提取 - 开始分析文档，使用提供商: ${provider}`);
 
@@ -842,43 +1527,1088 @@ ${documentContent}
       completion = await client.chat.completions.create({
         model,
         messages: [{ role: 'user', content: extractionPrompt }],
-        temperature: 0.3,
-        max_tokens: 8000
+        temperature: 0.2,  // 降低温度提高准确性和完整性
+        max_tokens: 16000  // 增加token限制以识别更多功能
       });
     } else {
       completion = await client.chat.completions.create({
         model,
         messages: [{ role: 'user', content: extractionPrompt }],
-        temperature: 0.3,
-        max_tokens: 8000
+        temperature: 0.2,  // 降低温度提高准确性和完整性
+        max_tokens: 16000  // 增加token限制以识别更多功能
       });
     }
 
     const reply = completion.choices[0].message.content;
     console.log(`功能清单提取 - 完成，响应长度: ${reply.length}`);
 
-    // 尝试解析JSON
+    // 🔧 多轮迭代补充（如果启用）
+    let finalReply = reply;
+    if (maxIterations > 1) {
+      console.log(`\n🔄 启动多轮迭代补充机制（${maxIterations - 1}轮）...`);
+      finalReply = await iterativeEnhancement(
+        documentContent,
+        reply,
+
+    // 尝试解析JSON - 增强版解析逻辑
     let functionList = null;
+    let parseDetails = { attempts: [], success: false };
+    
     try {
-      // 提取JSON部分
-      const jsonMatch = reply.match(/```json\s*([\s\S]*?)\s*```/) || reply.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        const jsonStr = jsonMatch[1] || jsonMatch[0];
-        functionList = JSON.parse(jsonStr);
+      // 提取JSON部分 - 使用多种匹配策略
+      let jsonStr = null;
+      let extractMethod = '';
+      
+      // 策略1：匹配 ```json ... ``` 代码块（非贪婪匹配）
+      const jsonBlockMatch = reply.match(/```json\s*([\s\S]*?)```/);
+      if (jsonBlockMatch && jsonBlockMatch[1]) {
+        jsonStr = jsonBlockMatch[1].trim();
+        extractMethod = 'json代码块';
+        parseDetails.attempts.push({ method: extractMethod, found: true });
+      }
+      
+      // 策略2：匹配 ``` ... ``` 代码块（可能没有json标记）
+      if (!jsonStr) {
+        const codeBlockMatch = reply.match(/```\s*([\s\S]*?)```/);
+        if (codeBlockMatch && codeBlockMatch[1] && codeBlockMatch[1].trim().startsWith('{')) {
+          jsonStr = codeBlockMatch[1].trim();
+          extractMethod = '普通代码块';
+          parseDetails.attempts.push({ method: extractMethod, found: true });
+        }
+      }
+      
+      // 策略3：直接匹配最外层的 { ... } 对象（使用更智能的括号匹配）
+      if (!jsonStr) {
+        const firstBrace = reply.indexOf('{');
+        if (firstBrace !== -1) {
+          // 使用括号匹配找到完整的JSON对象
+          let depth = 0;
+          let lastBrace = -1;
+          for (let i = firstBrace; i < reply.length; i++) {
+            if (reply[i] === '{') depth++;
+            if (reply[i] === '}') {
+              depth--;
+              if (depth === 0) {
+                lastBrace = i;
+                break;
+              }
+            }
+          }
+          
+          if (lastBrace !== -1) {
+            jsonStr = reply.substring(firstBrace, lastBrace + 1);
+            extractMethod = '直接括号匹配';
+            parseDetails.attempts.push({ method: extractMethod, found: true });
+          }
+        }
+      }
+      
+      if (jsonStr) {
+        // 清理JSON字符串中的常见问题
+        const originalLength = jsonStr.length;
+        jsonStr = jsonStr
+          // 移除可能的BOM字符
+          .replace(/^\uFEFF/, '')
+          // 移除JSON中的注释（// 和 /* */）
+          .replace(/\/\/[^\n]*/g, '')
+          .replace(/\/\*[\s\S]*?\*\//g, '')
+          // 移除尾随逗号（对象和数组中最后一个元素后的逗号）
+          .replace(/,(\s*[}\]])/g, '$1')
+          // 修复可能的换行问题
+          .replace(/\r\n/g, '\n')
+          // 移除控制字符（除了换行和制表符）
+          .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+          // 修复可能的转义问题
+          .replace(/\\\\n/g, '\\n')
+          .trim();
+        
+        console.log(`功能清单提取 - 提取方法: ${extractMethod}, 原始长度: ${originalLength}, 清理后长度: ${jsonStr.length}`);
+        console.log('功能清单提取 - JSON预览:', jsonStr.substring(0, 200) + '...');
+        
+        try {
+          functionList = JSON.parse(jsonStr);
+          parseDetails.success = true;
+          parseDetails.method = extractMethod;
+          console.log('功能清单提取 - JSON解析成功');
+        } catch (strictError) {
+          console.log('功能清单提取 - 标准JSON解析失败:', strictError.message);
+          parseDetails.attempts.push({ method: '标准解析', error: strictError.message });
+          
+          // 尝试更宽松的解析
+          try {
+            let relaxedJson = jsonStr
+              .replace(/,(\s*[}\]])/g, '$1')  // 移除尾随逗号
+              .replace(/([{,]\s*)([a-zA-Z_$][\w$]*)\s*:/g, '$1"$2":')  // 无引号的key加引号
+              .replace(/:\s*'([^']*)'/g, ': "$1"')  // 单引号值转双引号
+              .replace(/""/g, '"');  // 修复双引号问题
+            
+            functionList = JSON.parse(relaxedJson);
+            parseDetails.success = true;
+            parseDetails.method = extractMethod + '(宽松模式)';
+            console.log('功能清单提取 - 宽松模式JSON解析成功');
+          } catch (relaxedError) {
+            console.log('功能清单提取 - 宽松模式解析失败:', relaxedError.message);
+            parseDetails.attempts.push({ method: '宽松解析', error: relaxedError.message });
+            
+            // 尝试修复截断的JSON
+            try {
+              console.log('功能清单提取 - 尝试修复截断的JSON');
+              let repairedJson = jsonStr;
+              
+              // 检查是否在字符串中间被截断（最后一个字符不是 } ] " ）
+              if (!repairedJson.match(/[}\]"]\s*$/)) {
+                // 如果在字符串值中被截断，尝试补全引号
+                const lastQuote = repairedJson.lastIndexOf('"');
+                const lastColon = repairedJson.lastIndexOf(':');
+                if (lastColon > lastQuote) {
+                  // 在键值对的值部分被截断，补全引号
+                  repairedJson += '"';
+                  console.log('补全了缺失的引号');
+                }
+              }
+              
+              // 统计未闭合的括号
+              let openBraces = 0, openBrackets = 0;
+              let inString = false;
+              for (let i = 0; i < repairedJson.length; i++) {
+                const char = repairedJson[i];
+                if (char === '"' && (i === 0 || repairedJson[i-1] !== '\\')) {
+                  inString = !inString;
+                }
+                if (!inString) {
+                  if (char === '{') openBraces++;
+                  if (char === '}') openBraces--;
+                  if (char === '[') openBrackets++;
+                  if (char === ']') openBrackets--;
+                }
+              }
+              
+              // 移除可能的不完整项（最后一个逗号后的内容）
+              if (openBraces > 0 || openBrackets > 0) {
+                const lastComma = repairedJson.lastIndexOf(',');
+                const lastCloseBrace = repairedJson.lastIndexOf('}');
+                const lastCloseBracket = repairedJson.lastIndexOf(']');
+                const lastClose = Math.max(lastCloseBrace, lastCloseBracket);
+                
+                if (lastComma > lastClose) {
+                  // 有一个逗号在最后一个闭合括号之后，说明后面的内容可能不完整
+                  repairedJson = repairedJson.substring(0, lastComma);
+                  console.log('移除了不完整的最后一项');
+                  
+                  // 重新计算括号
+                  openBraces = 0; openBrackets = 0; inString = false;
+                  for (let i = 0; i < repairedJson.length; i++) {
+                    const char = repairedJson[i];
+                    if (char === '"' && (i === 0 || repairedJson[i-1] !== '\\')) {
+                      inString = !inString;
+                    }
+                    if (!inString) {
+                      if (char === '{') openBraces++;
+                      if (char === '}') openBraces--;
+                      if (char === '[') openBrackets++;
+                      if (char === ']') openBrackets--;
+                    }
+                  }
+                }
+              }
+              
+              // 补全缺失的闭合括号
+              console.log(`需要补全: ${openBrackets} 个], ${openBraces} 个}`);
+              repairedJson += ']'.repeat(openBrackets) + '}'.repeat(openBraces);
+              
+              functionList = JSON.parse(repairedJson);
+              parseDetails.success = true;
+              parseDetails.method = extractMethod + '(修复模式)';
+              console.log('功能清单提取 - JSON修复成功');
+            } catch (repairError) {
+              console.log('功能清单提取 - JSON修复失败:', repairError.message);
+              parseDetails.attempts.push({ method: 'JSON修复', error: repairError.message });
+            }
+          }
+        }
+      } else {
+        console.log('功能清单提取 - 未找到JSON内容');
+        parseDetails.attempts.push({ method: 'JSON提取', found: false });
       }
     } catch (parseError) {
-      console.log('功能清单提取 - JSON解析失败，返回原始文本:', parseError.message);
+      console.error('功能清单提取 - 解析过程异常:', parseError);
+      parseDetails.attempts.push({ method: '总体解析', error: parseError.message });
+    }
+
+    // 策略4：如果JSON解析全部失败，尝试从纯文本中提取功能列表
+    if (!functionList) {
+      console.log('功能清单提取 - JSON解析失败，尝试从纯文本提取功能列表');
+      parseDetails.attempts.push({ method: '纯文本提取', started: true });
+      
+      functionList = extractFunctionListFromText(finalReply);
+      if (functionList && functionList.modules && functionList.modules.length > 0) {
+        parseDetails.success = true;
+        parseDetails.method = '纯文本提取';
+        console.log('功能清单提取 - 从纯文本提取成功，识别到', functionList.totalFunctions, '个功能');
+      } else {
+        console.log('功能清单提取 - 纯文本提取也失败');
+        parseDetails.attempts.push({ method: '纯文本提取', success: false });
+      }
+    }
+    
+    // 记录解析详情到响应中，便于调试
+    if (!functionList) {
+      console.error('功能清单提取 - 所有解析策略均失败');
+      console.error('解析尝试详情:', JSON.stringify(parseDetails, null, 2));
+      console.error('AI响应预览:', reply.substring(0, 500));
+    }
+
+    // 🔧 验证并修正泛化的功能名称
+    if (functionList) {
+      console.log('\n🔍 检测并修正泛化功能名称...');
+      functionList = validateAndFixFunctionNames(functionList);
+      
+      // 检查质量
+      const qualityIssues = checkFunctionListQuality(functionList);
+      if (qualityIssues.length > 0) {
+        console.log('\n⚠️ 功能列表质量问题:');
+        qualityIssues.forEach(issue => console.log('  - ' + issue));
+      }
     }
 
     res.json({
       success: true,
       functionList,
-      rawResponse: reply,
-      provider
+      rawResponse: finalReply,
+      provider,
+      mode: 'standard',
+      parseDetails: !functionList ? parseDetails : undefined
     });
   } catch (error) {
     console.error('功能清单提取失败:', error);
     res.status(500).json({ error: '功能清单提取失败: ' + error.message });
+  }
+}
+
+/**
+ * 大文档分块处理 - 核心函数
+ * 将文档分块后，对每块进行深度分析，最后合并结果
+ */
+async function extractFromLargeDocument(documentContent, clientConfig, maxIterations) {
+  const { client, model, useGeminiSDK, useGroqSDK, provider } = clientConfig;
+  
+  // 1. 智能分块
+  const chunks = smartChunkDocument(documentContent, 6000);
+  console.log(`\n📦 开始处理 ${chunks.length} 个文档块...\n`);
+  
+  // 2. 对每个块进行功能提取
+  const allFunctionsPerChunk = [];
+  
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    console.log(`\n${'─'.repeat(60)}`);
+    console.log(`🔍 处理第 ${i + 1}/${chunks.length} 块 (${chunk.size} 字符)`);
+    console.log('─'.repeat(60));
+    
+    // 构建针对当前块的提示词（简化版，聚焦当前块）
+    const chunkPrompt = buildChunkExtractionPrompt(chunk, i + 1, chunks.length);
+    
+    // 调用AI进行功能提取
+    let completion = null;
+    try {
+      if (useGeminiSDK) {
+        const result = await client.generateContent(chunkPrompt);
+        const response = await result.response;
+        completion = {
+          choices: [{ message: { content: response.text() } }]
+        };
+      } else if (useGroqSDK) {
+        completion = await client.chat.completions.create({
+          model,
+          messages: [{ role: 'user', content: chunkPrompt }],
+          temperature: 0.2,
+          max_tokens: 12000
+        });
+      } else {
+        completion = await client.chat.completions.create({
+          model,
+          messages: [{ role: 'user', content: chunkPrompt }],
+          temperature: 0.2,
+          max_tokens: 12000
+        });
+      }
+      
+      const reply = completion.choices[0].message.content;
+      
+      // 多轮迭代补充当前块的功能（如果启用）
+      let finalReply = reply;
+      if (maxIterations > 1) {
+        console.log(`  🔄 对当前块进行 ${maxIterations - 1} 轮迭代补充...`);
+        finalReply = await iterativeEnhancement(
+          chunk.content,
+          reply,
+          clientConfig,
+          maxIterations - 1
+        );
+      }
+      
+      // 解析功能列表
+      const chunkFunctions = parseFunctionListFromResponse(finalReply);
+      allFunctionsPerChunk.push(chunkFunctions);
+      
+      console.log(`  ✅ 当前块识别到 ${chunkFunctions.totalFunctions} 个功能`);
+      
+    } catch (error) {
+      console.error(`  ❌ 处理第 ${i + 1} 块失败:`, error.message);
+      allFunctionsPerChunk.push({ modules: [], totalFunctions: 0 });
+    }
+  }
+  
+  // 3. 合并所有块的结果
+  console.log(`\n${'='.repeat(60)}`);
+  console.log('🔗 合并所有块的功能清单...');
+  const mergedFunctionList = mergeFunctionLists(allFunctionsPerChunk);
+  
+  // 4. 去重和质量检查
+  console.log('🧹 去重和质量检查...');
+  let finalFunctionList = deduplicateAndValidate(mergedFunctionList);
+  
+  // 4.5 验证并修正泛化功能名称
+  console.log('🔍 检测并修正泛化功能名称...');
+  finalFunctionList = validateAndFixFunctionNames(finalFunctionList);
+  
+  // 检查质量
+  const qualityIssues = checkFunctionListQuality(finalFunctionList);
+  if (qualityIssues.length > 0) {
+    console.log('\n⚠️ 功能列表质量问题:');
+    qualityIssues.forEach(issue => console.log('  - ' + issue));
+  }
+  
+  // 5. 添加元数据
+  finalFunctionList._metadata = {
+    totalChunks: chunks.length,
+    processedAt: new Date().toISOString(),
+    mode: 'chunked-processing'
+  };
+  
+  console.log(`\n✅ 大文档处理完成！`);
+  console.log(`总计识别功能: ${finalFunctionList.totalFunctions} 个`);
+  console.log('='.repeat(60) + '\n');
+  
+  return finalFunctionList;
+}
+
+/**
+ * 构建针对文档块的提取提示词
+ */
+function buildChunkExtractionPrompt(chunk, chunkIndex, totalChunks) {
+  return `你是功能点识别专家。当前处理文档的第 ${chunkIndex}/${totalChunks} 部分。
+
+# 🚨🚨🚨 绝对禁止泛化表达！（违规必须重做）
+
+**❌ 严重错误示例（禁止出现）：**
+- ❌ "数据业务画像生成" → 必须改为："用户行为特征统计" 或 "小区流量特征分析"
+- ❌ "数据业务可视化展示" → 必须改为："用户数趋势折线图展示" 或 "流量分布饼图查看"
+- ❌ "数据业务智能体交互" → 必须改为："用户数据查询提交" 或 "配置参数设置"
+- ❌ "数据查询" → 必须改为："小区用户数查询" 或 "基站流量查询"
+
+**✅ 正确示例（必须这样写）：**
+- ✅ "小区用户数日汇总数据查询"（明确：数据对象+时间粒度+操作）
+- ✅ "华为基站流量折线图展示"（明确：厂商+数据对象+图表类型+操作）
+- ✅ "用户数5分钟汇总定时任务"（明确：数据对象+时间粒度+操作）
+
+**🎯 每个功能名称必须包含（至少3个）：**
+1. **数据对象**：用户数/流量/小区/基站（不能只写"数据"）
+2. **操作动作**：查询/导出/统计/展示/配置（必须明确）
+3. **限定条件**：厂商/时间粒度/图表类型（至少一个）
+
+# 核心识别规则
+
+1. **厂商维度拆分**：不同厂商（华为/中兴/爱立信）的同类功能必须单独列出
+2. **操作维度拆分**：每个操作（查询/导出/导入/统计/汇总）都是独立功能
+3. **时间粒度拆分**：不同时间粒度（5分钟/小时/日/周/月）必须分开
+4. **数据对象拆分**：不同数据对象（用户数/流量/小区/基站）必须分开
+
+# 必须识别的功能类型
+
+- ✅ **查询功能**：文档中提到"支持查询"、"查询条件"等
+- ✅ **导出功能**：文档中提到"导出"、"下载"、"生成Excel"等
+- ✅ **导入功能**：文档中提到"导入"、"上传"、"批量导入"等
+- ✅ **详情查看**：文档中提到"点击跳转"、"查看详情"等
+- ✅ **统计汇总**：文档中提到"统计"、"汇总"、"计算"等
+- ✅ **定时任务**：文档中提到"定时"、"周期"、"自动执行"等
+- ✅ **数据展示**：图表、列表、大屏等展示功能（必须明确图表类型）
+- ✅ **推送通知**：短信、邮件、消息推送等
+
+# 文档内容
+
+${chunk.content}
+${chunk.overlapNext ? '\n[下一块开头预览]：' + chunk.overlapNext : ''}
+
+# 输出格式
+
+请以JSON格式输出：
+
+\`\`\`json
+{
+  "chunkIndex": ${chunkIndex},
+  "modules": [
+    {
+      "moduleName": "模块名称",
+      "functions": [
+        {
+          "id": 1,
+          "name": "小区用户数查询",  // ⚠️ 禁止泛化！必须包含：数据对象+操作
+          "triggerType": "用户触发",
+          "description": "查询指定小区的用户数统计数据",
+          "dataObjects": ["小区用户数"]  // ⚠️ 必须具体，不能只写"数据"
+        },
+        {
+          "id": 2,
+          "name": "用户数趋势折线图展示",  // ⚠️ 可视化必须明确图表类型
+          "triggerType": "用户触发",
+          "description": "以折线图形式展示用户数随时间的变化趋势",
+          "dataObjects": ["用户数趋势"]
+        }
+      ]
+    }
+  ]
+}
+\`\`\`
+
+**⚠️ 输出前自查：**
+- 是否有功能名称包含"数据业务"？（必须删除！）
+- 是否有功能名称只写"数据"不说明具体对象？（必须明确！）
+- 是否有功能名称只写"可视化"不说明图表类型？（必须明确！）
+- 功能数量是否≥5个？（块内功能太少说明识别不够！）
+
+**直接输出JSON，不要添加任何解释文字！**`;
+}
+
+/**
+ * 多轮迭代补充机制 - 让AI反复思考，补充遗漏的功能
+ */
+async function iterativeEnhancement(documentContent, previousResponse, clientConfig, iterations) {
+  const { client, model, useGeminiSDK, useGroqSDK } = clientConfig;
+  let currentResponse = previousResponse;
+  
+  for (let i = 0; i < iterations; i++) {
+    console.log(`\n  📝 第 ${i + 1}/${iterations} 轮补充迭代...`);
+    
+    // 解析当前已识别的功能
+    const currentFunctions = parseFunctionListFromResponse(currentResponse);
+    const functionNames = currentFunctions.modules
+      .flatMap(m => m.functions || [])
+      .map(f => f.name)
+      .join('、');
+    
+    console.log(`  当前已识别: ${currentFunctions.totalFunctions} 个功能`);
+    
+    // 构建补充提示词
+    const enhancementPrompt = `你刚才识别了以下功能：
+
+${functionNames}
+
+# 🚨 首先检查已识别功能是否有泛化表达（必须修正！）
+
+**检查清单：**
+- 是否有"数据业务XXX"？→ 必须改为具体数据对象（用户数/流量/小区）
+- 是否有只写"数据"不明确对象？→ 必须明确是什么数据
+- 是否有只写"可视化/展示"不说明图表？→ 必须明确图表类型（折线图/柱状图/饼图）
+- 是否有功能名称超过15字？→ 必须拆分为多个功能
+
+**如果发现泛化表达，请先输出修正后的功能清单！**
+
+# 重新审查文档，找出可能遗漏的功能
+
+特别检查：
+1. 是否遗漏了辅助功能（导出、查询、详情查看）
+2. 是否遗漏了不同厂商的独立功能（华为/中兴/爱立信必须分开）
+3. 是否遗漏了不同时间粒度的功能（5分钟/小时/日/周/月必须分开）
+4. 是否遗漏了定时任务
+5. 是否遗漏了界面交互功能（跳转、筛选、排序）
+6. 是否遗漏了隐含功能（"展示列表"隐含查询+展示2个功能）
+
+**⚠️ 补充的功能必须具体，禁止泛化！**
+- ✅ 正确："小区用户数查询"
+- ❌ 错误："数据查询"
+
+如果发现遗漏或需要修正，请输出补充/修正的功能清单（JSON格式）。
+如果既无遗漏也无需修正，请输出：{"noMoreFunctions": true}
+
+文档内容（前5000字）：
+${documentContent.substring(0, 5000)}`;
+    
+    let completion = null;
+    try {
+      if (useGeminiSDK) {
+        const result = await client.generateContent(enhancementPrompt);
+        const response = await result.response;
+        completion = {
+          choices: [{ message: { content: response.text() } }]
+        };
+      } else if (useGroqSDK) {
+        completion = await client.chat.completions.create({
+          model,
+          messages: [{ role: 'user', content: enhancementPrompt }],
+          temperature: 0.3,
+          max_tokens: 8000
+        });
+      } else {
+        completion = await client.chat.completions.create({
+          model,
+          messages: [{ role: 'user', content: enhancementPrompt }],
+          temperature: 0.3,
+          max_tokens: 8000
+        });
+      }
+      
+      const enhancementReply = completion.choices[0].message.content;
+      
+      // 检查是否完成
+      if (enhancementReply.includes('"noMoreFunctions"') || enhancementReply.includes('没有遗漏')) {
+        console.log(`  ✅ AI认为已经完整，停止迭代`);
+        break;
+      }
+      
+      // 合并补充的功能
+      const enhancedFunctions = parseFunctionListFromResponse(enhancementReply);
+      if (enhancedFunctions.totalFunctions > 0) {
+        console.log(`  ➕ 补充了 ${enhancedFunctions.totalFunctions} 个功能`);
+        currentResponse = mergeResponses(currentResponse, enhancementReply);
+      } else {
+        console.log(`  ℹ️ 本轮未发现新功能`);
+      }
+      
+    } catch (error) {
+      console.error(`  ⚠️ 第 ${i + 1} 轮迭代失败:`, error.message);
+      break;
+    }
+  }
+  
+  return currentResponse;
+}
+
+/**
+ * 解析AI响应为功能列表对象
+ */
+function parseFunctionListFromResponse(response) {
+  // 尝试JSON解析
+  let functionList = null;
+  
+  try {
+    // 提取JSON
+    const jsonMatch = response.match(/```json\s*([\s\S]*?)```/) || 
+                     response.match(/```\s*([\s\S]*?)```/) ||
+                     response.match(/\{[\s\S]*\}/);
+    
+    if (jsonMatch) {
+      const jsonStr = jsonMatch[1] || jsonMatch[0];
+      functionList = JSON.parse(jsonStr.trim());
+    }
+  } catch (e) {
+    // JSON解析失败，尝试文本提取
+    functionList = extractFunctionListFromText(response);
+  }
+  
+  if (!functionList || !functionList.modules) {
+    return {
+      projectName: '',
+      projectDescription: '',
+      totalFunctions: 0,
+      modules: [],
+      timedTasks: [],
+      suggestions: []
+    };
+  }
+  
+  // 计算总功能数
+  functionList.totalFunctions = functionList.modules
+    .reduce((sum, m) => sum + (m.functions ? m.functions.length : 0), 0);
+  
+  return functionList;
+}
+
+/**
+ * 合并多个功能列表
+ */
+function mergeFunctionLists(functionLists) {
+  const merged = {
+    projectName: '',
+    projectDescription: '',
+    totalFunctions: 0,
+    modules: [],
+    timedTasks: [],
+    suggestions: []
+  };
+  
+  // 使用Map来合并同名模块
+  const moduleMap = new Map();
+  
+  for (const list of functionLists) {
+    if (!list || !list.modules) continue;
+    
+    // 取第一个非空的项目信息
+    if (!merged.projectName && list.projectName) {
+      merged.projectName = list.projectName;
+    }
+    if (!merged.projectDescription && list.projectDescription) {
+      merged.projectDescription = list.projectDescription;
+    }
+    
+    // 合并模块和功能
+    for (const module of list.modules) {
+      if (!module.moduleName) continue;
+      
+      if (!moduleMap.has(module.moduleName)) {
+        moduleMap.set(module.moduleName, {
+          moduleName: module.moduleName,
+          functions: []
+        });
+      }
+      
+      const existingModule = moduleMap.get(module.moduleName);
+      if (module.functions && Array.isArray(module.functions)) {
+        existingModule.functions.push(...module.functions);
+      }
+    }
+    
+    // 合并定时任务
+    if (list.timedTasks && Array.isArray(list.timedTasks)) {
+      merged.timedTasks.push(...list.timedTasks);
+    }
+    
+    // 合并建议
+    if (list.suggestions && Array.isArray(list.suggestions)) {
+      merged.suggestions.push(...list.suggestions);
+    }
+  }
+  
+  merged.modules = Array.from(moduleMap.values());
+  merged.totalFunctions = merged.modules
+    .reduce((sum, m) => sum + (m.functions ? m.functions.length : 0), 0);
+  
+  return merged;
+}
+
+/**
+ * 去重和验证功能列表
+ */
+function deduplicateAndValidate(functionList) {
+  const seen = new Set();
+  
+  for (const module of functionList.modules) {
+    if (!module.functions) continue;
+    
+    // 去重功能
+    const uniqueFunctions = [];
+    for (const func of module.functions) {
+      const normalizedName = func.name
+        .replace(/[\s\-\_&（）()]/g, '')
+        .toLowerCase();
+      
+      if (!seen.has(normalizedName)) {
+        seen.add(normalizedName);
+        uniqueFunctions.push(func);
+      }
+    }
+    
+    module.functions = uniqueFunctions;
+    
+    // 重新分配ID
+    module.functions.forEach((func, index) => {
+      func.id = index + 1;
+    });
+  }
+  
+  // 重新计算总数
+  functionList.totalFunctions = functionList.modules
+    .reduce((sum, m) => sum + (m.functions ? m.functions.length : 0), 0);
+  
+  // 去重定时任务
+  if (functionList.timedTasks) {
+    const uniqueTasks = [];
+    const taskNames = new Set();
+    for (const task of functionList.timedTasks) {
+      if (!taskNames.has(task.name)) {
+        taskNames.add(task.name);
+        uniqueTasks.push(task);
+      }
+    }
+    functionList.timedTasks = uniqueTasks;
+  }
+  
+  return functionList;
+}
+
+/**
+ * 合并两个响应文本（用于迭代补充）
+ */
+function mergeResponses(originalResponse, newResponse) {
+  // 简单合并：将新响应附加到原响应
+  return originalResponse + '\n\n--- 补充内容 ---\n\n' + newResponse;
+}
+
+/**
+ * 验证并修正泛化的功能名称
+ * 检测到泛化表达后自动展开为具体功能
+ */
+function validateAndFixFunctionNames(functionList) {
+  // 泛化词汇黑名单和复合操作检测
+  const genericTerms = {
+    '用户画像': ['用户行为特征统计', '用户属性分析', '用户标签生成'],
+    '小区画像': ['小区负荷率统计', '小区用户数分析', '小区流量特征分析'],
+    '业务画像': ['业务类型统计', '业务流量分析', '业务用户分布分析'],
+    '数据可视化': ['数据趋势折线图展示', '数据分布柱状图展示', '数据占比饼图展示'],
+    '数据业务可视化': ['业务数据折线图展示', '业务数据柱状图展示', '业务数据饼图展示'],
+    '首页展示': ['关键指标卡片展示', '趋势图表展示', '实时告警展示'],
+    '交互功能': ['参数配置', '数据查询', '结果导出'],
+    '智能体交互': ['数据提交', '参数设置', '查询请求'],
+    '可视化展示': ['折线图展示', '柱状图展示', '饼图展示'],
+    '数据展示': ['数据列表展示', '数据图表展示', '数据详情展示']
+  };
+  
+  // 复合操作模式检测（正则匹配）
+  const compoundOperationPatterns = [
+    // "生成XXX表/报表" 模式
+    { 
+      pattern: /生成(.+?)(评估表|报表|表格|报告)/,
+      split: (match) => {
+        const dataObj = match[1];
+        return [
+          `${dataObj}评估`,
+          `${dataObj}评估表生成`
+        ];
+      }
+    },
+    // "统计并生成" 模式
+    {
+      pattern: /(统计|计算|分析|评估)并(生成|导出|展示)/,
+      split: (match, fullName) => {
+        const beforeAnd = fullName.substring(0, fullName.indexOf('并'));
+        const afterAnd = fullName.substring(fullName.indexOf('并') + 1);
+        return [beforeAnd, afterAnd];
+      }
+    },
+    // "查询并导出" 模式
+    {
+      pattern: /查询并导出/,
+      split: (match, fullName) => {
+        const prefix = fullName.replace('查询并导出', '');
+        return [
+          `${prefix}查询`,
+          `${prefix}Excel导出`
+        ];
+      }
+    }
+  ];
+  
+  let hasGeneric = false;
+  const warnings = [];
+  
+  for (const module of functionList.modules) {
+    if (!module.functions) continue;
+    
+    const expandedFunctions = [];
+    
+    for (const func of module.functions) {
+      let isGeneric = false;
+      let expandedNames = null;
+      
+      // 首先检查复合操作
+      let compoundDetected = false;
+      for (const pattern of compoundOperationPatterns) {
+        const match = func.name.match(pattern.pattern);
+        if (match) {
+          compoundDetected = true;
+          isGeneric = true;
+          hasGeneric = true;
+          
+          const splitNames = pattern.split(match, func.name);
+          warnings.push(`⚠️ 检测到复合操作 "${func.name}"，自动拆分为 ${splitNames.length} 个独立功能`);
+          
+          for (let i = 0; i < splitNames.length; i++) {
+            expandedFunctions.push({
+              ...func,
+              id: expandedFunctions.length + 1,
+              name: splitNames[i],
+              description: `${splitNames[i]}功能`
+            });
+          }
+          
+          break;
+        }
+      }
+      
+      // 如果不是复合操作，再检查泛化词汇
+      if (!compoundDetected) {
+        for (const [genericTerm, expansions] of Object.entries(genericTerms)) {
+          if (func.name.includes(genericTerm)) {
+            isGeneric = true;
+            hasGeneric = true;
+            expandedNames = expansions;
+            
+            warnings.push(`⚠️ 检测到泛化功能 "${func.name}"，自动展开为 ${expansions.length} 个具体功能`);
+            
+            // 将泛化功能展开为多个具体功能
+            for (let i = 0; i < expansions.length; i++) {
+              expandedFunctions.push({
+                ...func,
+                id: expandedFunctions.length + 1,
+                name: func.name.replace(genericTerm, expansions[i]),
+                description: func.description.replace(genericTerm, expansions[i])
+              });
+            }
+            
+            break;
+          }
+        }
+      }
+      
+      // 如果不是泛化功能，保留原功能
+      if (!isGeneric) {
+        // 但仍需检查是否只有单个泛化词
+        const singleGenericTerms = ['画像', '可视化', '交互', '生成'];
+        let needsWarning = false;
+        
+        for (const term of singleGenericTerms) {
+          if (func.name === term || func.name.endsWith(term) && func.name.length < 6) {
+            warnings.push(`⚠️ 功能 "${func.name}" 过于简陋，建议明确具体内容`);
+            needsWarning = true;
+            break;
+          }
+        }
+        
+        expandedFunctions.push(func);
+      }
+    }
+    
+    // 替换原功能列表
+    module.functions = expandedFunctions;
+    
+    // 重新分配ID
+    module.functions.forEach((func, index) => {
+      func.id = index + 1;
+    });
+  }
+  
+  // 重新计算总功能数
+  functionList.totalFunctions = functionList.modules
+    .reduce((sum, m) => sum + (m.functions ? m.functions.length : 0), 0);
+  
+  if (hasGeneric) {
+    console.log('\n' + '='.repeat(60));
+    console.log('🔧 泛化功能自动修正');
+    console.log('='.repeat(60));
+    warnings.forEach(w => console.log(w));
+    console.log(`修正后总功能数: ${functionList.totalFunctions}`);
+    console.log('='.repeat(60) + '\n');
+  }
+  
+  return functionList;
+}
+
+/**
+ * 检查功能列表质量，如果泛化过多则拒绝
+ */
+function checkFunctionListQuality(functionList) {
+  const issues = [];
+  
+  // 检查功能总数
+  if (functionList.totalFunctions < 10) {
+    issues.push(`功能数量过少（${functionList.totalFunctions}个），可能识别不完整`);
+  }
+  
+  // 检查泛化词汇
+  const forbiddenWords = ['画像', '可视化', '交互', '数据业务'];
+  
+  for (const module of functionList.modules) {
+    if (!module.functions) continue;
+    
+    for (const func of module.functions) {
+      // 检查是否包含禁止词汇（单独使用）
+      for (const word of forbiddenWords) {
+        if (func.name === word) {
+          issues.push(`功能 "${func.name}" 过于泛化，必须明确具体内容`);
+        }
+      }
+      
+      // 检查功能名称长度（过短通常意味着泛化）
+      if (func.name.length < 4) {
+        issues.push(`功能 "${func.name}" 名称过短，可能不够具体`);
+      }
+      
+      // 检查是否只包含"数据"而不明确对象
+      if (func.name.includes('数据') && !func.name.match(/(用户数|流量|小区|基站|告警|配置)/)) {
+        issues.push(`功能 "${func.name}" 包含"数据"但未明确具体对象`);
+      }
+    }
+  }
+  
+  return issues;
+}
+
+// 从纯文本中提取功能列表的辅助函数
+function extractFunctionListFromText(text) {
+  try {
+    const result = {
+      projectName: '',
+      projectDescription: '',
+      totalFunctions: 0,
+      modules: [],
+      timedTasks: [],
+      suggestions: []
+    };
+
+    // 提取项目名称
+    const projectNameMatch = text.match(/项目名称[：:]\s*(.+)/);
+    if (projectNameMatch) {
+      result.projectName = projectNameMatch[1].trim();
+    }
+
+    // 提取项目描述
+    const projectDescMatch = text.match(/(?:项目描述|简要描述)[：:]\s*(.+)/);
+    if (projectDescMatch) {
+      result.projectDescription = projectDescMatch[1].trim();
+    }
+
+    // 识别模块和功能
+    const lines = text.split('\n');
+    let currentModule = null;
+    let functionId = 1;
+    const allFunctions = [];
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      
+      // 识别模块标题（通常是 ## 或 ### 开头，或者包含"模块"字样）
+      const moduleMatch = line.match(/^#{1,3}\s*(.+模块.*)/) || 
+                          line.match(/^#{1,3}\s*(\d+[\.、]\s*.+)/) ||
+                          line.match(/所属模块[：:]\s*(.+)/);
+      if (moduleMatch) {
+        const moduleName = moduleMatch[1].replace(/^[\d\.、\s]+/, '').trim();
+        if (moduleName && moduleName.length > 1 && moduleName.length < 50) {
+          currentModule = {
+            moduleName: moduleName,
+            functions: []
+          };
+          result.modules.push(currentModule);
+        }
+        continue;
+      }
+
+      // 识别功能项（多种格式）
+      // 格式1: "功能名称：XXX" 或 "名称：XXX"
+      const funcNameMatch = line.match(/(?:功能名称|名称)[：:]\s*(.+)/);
+      if (funcNameMatch) {
+        const funcName = funcNameMatch[1].trim();
+        if (funcName && funcName.length > 1) {
+          // 查找触发方式（可能在下一行或同一行）
+          let triggerType = '用户触发';
+          const triggerMatch = line.match(/触发方式[：:]\s*(.+)/) || 
+                               (lines[i+1] && lines[i+1].match(/触发方式[：:]\s*(.+)/));
+          if (triggerMatch) {
+            triggerType = triggerMatch[1].trim();
+          }
+
+          // 查找描述
+          let description = '';
+          const descMatch = (lines[i+1] && lines[i+1].match(/(?:描述|简要描述)[：:]\s*(.+)/)) ||
+                           (lines[i+2] && lines[i+2].match(/(?:描述|简要描述)[：:]\s*(.+)/));
+          if (descMatch) {
+            description = descMatch[1].trim();
+          }
+
+          const func = {
+            id: functionId++,
+            name: funcName,
+            triggerType: triggerType,
+            description: description,
+            dataObjects: []
+          };
+
+          if (currentModule) {
+            currentModule.functions.push(func);
+          }
+          allFunctions.push(func);
+        }
+        continue;
+      }
+
+      // 格式2: "- XXX功能" 或 "* XXX" 或 "1. XXX"
+      const listItemMatch = line.match(/^[-*•]\s*(.+)/) || line.match(/^\d+[\.、]\s*(.+)/);
+      if (listItemMatch) {
+        const itemText = listItemMatch[1].trim();
+        // 检查是否像是功能名称（包含动词或"功能"字样）
+        const actionVerbs = ['创建', '查询', '修改', '删除', '导入', '导出', '统计', '汇总', '推送', '监控', '分析', '生成', '接收', '发送', '上传', '下载'];
+        const isFunction = actionVerbs.some(verb => itemText.includes(verb)) || 
+                          itemText.includes('功能') ||
+                          itemText.includes('数据') ||
+                          itemText.match(/[\u4e00-\u9fa5]{2,}(?:入库|解析|处理|计算|展示|可视化)/);
+        
+        if (isFunction && itemText.length > 2 && itemText.length < 50) {
+          // 判断触发类型
+          let triggerType = '用户触发';
+          if (itemText.includes('定时') || itemText.includes('周期') || itemText.includes('自动') || 
+              itemText.includes('每天') || itemText.includes('每周') || itemText.includes('汇总')) {
+            triggerType = '时钟触发';
+          } else if (itemText.includes('接收') || itemText.includes('推送') || itemText.includes('接口')) {
+            triggerType = '接口触发';
+          }
+
+          const func = {
+            id: functionId++,
+            name: itemText.replace(/[：:].+$/, '').trim(),
+            triggerType: triggerType,
+            description: '',
+            dataObjects: []
+          };
+
+          if (currentModule) {
+            currentModule.functions.push(func);
+          }
+          allFunctions.push(func);
+        }
+        continue;
+      }
+
+      // 格式3: 识别定时任务
+      const timerMatch = line.match(/(?:定时任务|周期任务)[：:]\s*(.+)/) ||
+                        line.match(/每(?:天|周|月|小时|分钟).+(?:执行|运行|汇总|统计)/);
+      if (timerMatch) {
+        const taskName = timerMatch[1] || line;
+        result.timedTasks.push({
+          name: taskName.trim(),
+          interval: '',
+          description: ''
+        });
+        continue;
+      }
+
+      // 格式4: 识别建议补充的功能
+      if (line.includes('建议补充') || line.includes('建议添加')) {
+        const suggestionMatch = line.match(/建议(?:补充|添加)[：:]\s*(.+)/);
+        if (suggestionMatch) {
+          result.suggestions.push(suggestionMatch[1].trim());
+        }
+      }
+    }
+
+    // 如果没有识别到模块，创建一个默认模块
+    if (result.modules.length === 0 && allFunctions.length > 0) {
+      result.modules.push({
+        moduleName: '功能模块',
+        functions: allFunctions
+      });
+    }
+
+    // 计算总功能数
+    result.totalFunctions = allFunctions.length;
+
+    // 如果没有识别到任何功能，返回null
+    if (result.totalFunctions === 0) {
+      return null;
+    }
+
+    return result;
+  } catch (error) {
+    console.log('从纯文本提取功能列表失败:', error.message);
+    return null;
   }
 }
 
@@ -926,79 +2656,118 @@ async function splitFromFunctionList(req, res) {
       });
     }
 
-    // 每轮处理更多功能（确保不遗漏）
-    const batchSize = 8;
+    // 每轮处理功能数量（平衡速度和质量）
+    const batchSize = 10;  // 从5增加到10，加快处理速度
     const currentBatch = pendingFunctions.slice(0, batchSize);
+    const totalBatches = Math.ceil(pendingFunctions.length / batchSize);
+    const currentBatchNumber = Math.ceil((confirmedFunctions.length - pendingFunctions.length) / batchSize) + 1;
+    
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`批次 ${currentBatchNumber}/${totalBatches}: 处理 ${currentBatch.length} 个功能`);
+    console.log(`总确认功能数: ${confirmedFunctions.length}`);
+    console.log(`已完成: ${uniqueCompleted.length}, 待处理: ${pendingFunctions.length}`);
+    console.log(`\n本批功能列表:`);
+    currentBatch.forEach((f, idx) => {
+      console.log(`  ${idx + 1}. ${f.name}`);
+    });
+    if (uniqueCompleted.length > 0) {
+      console.log(`\n已完成功能:`);
+      uniqueCompleted.forEach((name, idx) => {
+        console.log(`  ${idx + 1}. ${name}`);
+      });
+    }
+    console.log('='.repeat(60) + '\n');
 
-    // 构建拆分提示词 - 强调子过程描述必须包含功能过程关键词
-    const splitPrompt = `你是一个COSMIC拆分专家。请对以下${currentBatch.length}个确认的功能进行ERWX拆分。
+    // 构建拆分提示词 - 超强化版本，确保每个功能必须有完整的E+R+W+X
+    const splitPrompt = `你是一个COSMIC拆分专家。现在处理第 ${currentBatchNumber}/${totalBatches} 批，共${currentBatch.length}个功能。
 
-# ⚠️ 最重要的规则：子过程描述必须包含功能过程的关键词！
+⚠️ **重要**：你必须为下面列出的每一个功能都输出4行（E+R+W+X），不能遗漏任何一个！
 
-## 错误示例（禁止）：
-| 功能过程 | 子过程描述（错误❌） |
-|---------|------------------|
-| 中兴智算板栅格字典表计算 | 接收栅格数据 |
-| 中兴智算板栅格字典表计算 | 读取轮廓数据 |
-| 中兴智算板栅格字典表计算 | 返回计算结果 |
+# ═══════════════════════════════════════════════════════════
+# 🚨🚨🚨 最高优先级规则（必须严格遵守！）🚨🚨🚨
+# ═══════════════════════════════════════════════════════════
 
-## 正确示例（必须）：
-| 功能过程 | 子过程描述（正确✅） |
-|---------|------------------|
-| 中兴智算板栅格字典表计算 | 接收**中兴智算板栅格**数据 |
-| 中兴智算板栅格字典表计算 | 读取**中兴栅格字典表**轮廓 |
-| 中兴智算板栅格字典表计算 | 保存**中兴栅格字典表**计算 |
-| 中兴智算板栅格字典表计算 | 返回**中兴栅格字典表**结果 |
+## 批次信息
+- 当前批次：${currentBatchNumber}/${totalBatches}
+- 本批功能数：${currentBatch.length}
+- **必须输出行数：${currentBatch.length * 4} 行**（${currentBatch.length}功能 × 4行/功能）
+
+## 规则1：每个功能必须有且只有4行（E+R+W+X）
+- 第1行：E（Entry/接收）- 接收外部输入
+- 第2行：R（Read/读取）- 读取规则或配置
+- 第3行：W（Write/写入）- 保存处理结果
+- 第4行：X（Exit/输出）- 返回响应结果
+
+## 规则2：子过程描述必须包含功能名称的核心关键词
+❌ 错误：功能名是"华为小区用户数5分钟汇总"，子过程写"接收数据"
+✅ 正确：功能名是"华为小区用户数5分钟汇总"，子过程写"接收华为小区用户数数据"
+
+## 规则3：绝对禁止遗漏任何功能！
+🚨 你必须逐一处理下面的${currentBatch.length}个功能，每个都输出4行，总共${currentBatch.length * 4}行！
 
 ---
 
-# 待拆分的功能列表（共${currentBatch.length}个，必须全部拆分！）
+# 📋 待拆分的功能列表（共${currentBatch.length}个，每个4行，共${currentBatch.length * 4}行）
 
-${currentBatch.map((fn, i) => `### 功能${i + 1}: ${fn.name}
+${currentBatch.map((fn, i) => {
+      // 提取功能名称的核心关键词
+      const keywords = fn.name
+        .replace(/[&（）()]/g, '')
+        .replace(/数据|功能|处理|计算|评估|分析|操作/g, ' ')
+        .split(/[\s,，、]+/)
+        .filter(s => s.length > 1)
+        .slice(0, 4)
+        .join('、') || fn.name;
+
+      return `## 功能${i + 1}/${currentBatch.length}: ${fn.name}
 - 触发方式：${fn.triggerType || '用户触发'}
-- 描述：${fn.description || '无'}
-- 涉及数据：${(fn.dataObjects || []).join('、') || '待识别'}
-- **提取关键词**：${fn.name.replace(/[&]/g, '').split(/(?:数据|功能|处理|计算|评估|分析|查询|汇总|导出|导入)/).filter(s => s.length > 1).slice(0, 3).join('、') || fn.name}`).join('\n\n')}
+- 描述：${fn.description || '（无描述）'}
+- **核心关键词（必须出现在子过程描述中）**：${keywords}`;
+    }).join('\n\n')}
 
 ---
 
-# 参考文档内容
+# 📚 参考文档内容
 
-${documentContent.substring(0, 6000)}${documentContent.length > 6000 ? '\n...(文档已截断)' : ''}
+${documentContent.substring(0, 5000)}${documentContent.length > 5000 ? '\n...(文档已截断)' : ''}
 
 ---
 
-# ERWX拆分规则
+# ═══════════════════════════════════════════════════════════
+# ERWX 拆分详细规则
+# ═══════════════════════════════════════════════════════════
 
-每个功能过程必须拆分为**4个子过程**（E+R+W+X）：
+| 类型 | 子过程含义 | 命名公式 | 示例 |
+|-----|----------|---------|-----|
+| **E** | 接收外部输入 | 接收+[核心关键词]+请求/数据 | 接收华为小区用户数数据 |
+| **R** | 读取规则配置 | 读取+[核心关键词]+配置/规则 | 读取用户数汇总规则配置 |
+| **W** | 写入处理结果 | 保存/记录+[核心关键词]+结果 | 保存华为小区用户数汇总结果 |
+| **X** | 输出响应结果 | 返回+[核心关键词]+响应 | 返回用户数汇总执行状态 |
 
-| 类型 | 含义 | 子过程描述格式（必须包含功能关键词） |
-|-----|-----|-------------------------------|
-| E | 接收 | 接收**[功能关键词]**请求/数据 |
-| R | 读取 | 读取**[功能关键词]**配置/规则 |
-| W | 写入 | 保存/记录**[功能关键词]**结果 |
-| X | 输出 | 返回**[功能关键词]**响应 |
+---
 
-# 输出格式
-
-请输出Markdown表格，**确保上述${currentBatch.length}个功能全部都有4行（E+R+W+X）**：
+# ✅ 输出格式（严格按此格式）
 
 |功能用户|触发事件|功能过程|子过程描述|数据移动类型|数据组|数据属性|
 |:---|:---|:---|:---|:---|:---|:---|
-|时钟触发|时钟触发|中兴智算板栅格字典表计算|接收中兴智算板栅格数据|E|中兴栅格数据包|时间、栅格ID、经度、纬度|
-||||读取中兴栅格字典表轮廓|R|中兴栅格字典表|地市、区县、场景名称|
-||||保存中兴栅格字典表计算|W|中兴栅格计算结果表|栅格ID、关联场景、计算时间|
-||||返回中兴栅格字典表结果|X|中兴栅格计算响应|计算状态、结果数量|
+|时钟触发|定时任务|华为小区用户数5分钟汇总|接收华为小区用户数原始数据|E|华为用户数原始数据|时间、小区标识、用户数量、区域|
+||||读取用户数汇总规则配置|R|汇总规则配置表|汇总周期、统计维度、过滤条件|
+||||保存华为小区用户数汇总结果|W|华为用户数汇总表|统计时间、小区标识、汇总用户数|
+||||返回用户数汇总执行状态|X|汇总执行响应|执行状态、处理记录数、耗时|
 
-# 核心要求（请严格遵守）
+---
 
-1. **必须拆分上述全部${currentBatch.length}个功能**，不能遗漏任何一个！
-2. **每个功能必须有E+R+W+X四个子过程**
-3. **子过程描述必须包含功能过程的关键词**（这是最重要的！）
-4. **功能名称只在E行填写，后续R/W/X行留空**
-5. **数据属性使用中文，用顿号分隔**
+# 🚨 输出前检查清单（必须核对！）
 
-请开始拆分（共${currentBatch.length}个功能，预期输出${currentBatch.length * 4}行）：`;
+请在输出表格前，确认以下内容：
+- [ ] 是否为每个功能都输出了4行（E+R+W+X）？
+- [ ] 总行数是否等于 ${currentBatch.length * 4} 行？
+- [ ] 每个子过程描述是否包含了功能名称的关键词？
+- [ ] 数据属性是否使用中文、用顿号分隔？
+
+---
+
+**请开始输出（共${currentBatch.length}个功能 × 4行 = ${currentBatch.length * 4}行）：**`;
 
     console.log(`基于功能清单拆分 - 第${round}轮，待拆分${currentBatch.length}个功能，使用提供商: ${provider}`);
 
@@ -1019,15 +2788,15 @@ ${documentContent.substring(0, 6000)}${documentContent.length > 6000 ? '\n...(�
       completion = await client.chat.completions.create({
         model,
         messages: [systemMessage, { role: 'user', content: splitPrompt }],
-        temperature: 0.5,
-        max_tokens: 8000
+        temperature: 0.3,  // 降低温度提高稳定性
+        max_tokens: 16000  // 增加token限制以处理更多功能
       });
     } else {
       completion = await client.chat.completions.create({
         model,
         messages: [systemMessage, { role: 'user', content: splitPrompt }],
-        temperature: 0.5,
-        max_tokens: 8000
+        temperature: 0.3,  // 降低温度提高稳定性
+        max_tokens: 16000  // 增加token限制以处理更多功能
       });
     }
 
@@ -1037,7 +2806,10 @@ ${documentContent.substring(0, 6000)}${documentContent.length > 6000 ? '\n...(�
     // 判断是否完成
     const isDone = pendingFunctions.length <= batchSize;
 
-    console.log(`基于功能清单拆分 - 第${round}轮完成，剩余${pendingFunctions.length - batchSize}个功能`);
+    const remainingCount = Math.max(0, pendingFunctions.length - batchSize);
+    console.log(`\n批次 ${currentBatchNumber}/${totalBatches} 完成`);
+    console.log(`已完成功能数: ${uniqueCompleted.length + currentBatch.length}/${confirmedFunctions.length}`);
+    console.log(`剩余待处理: ${remainingCount} 个功能\n`);
 
     res.json({
       success: true,
@@ -1045,7 +2817,12 @@ ${documentContent.substring(0, 6000)}${documentContent.length > 6000 ? '\n...(�
       round,
       isDone,
       completedFunctions: uniqueCompleted.length,
-      pendingCount: Math.max(0, pendingFunctions.length - batchSize),
+      pendingCount: remainingCount,
+      currentBatch: currentBatch.length,
+      currentBatchFunctions: currentBatch.map(f => f.name), // 返回本批处理的功能名
+      totalFunctions: confirmedFunctions.length,
+      batchNumber: currentBatchNumber,
+      totalBatches: totalBatches,
       provider
     });
   } catch (error) {
