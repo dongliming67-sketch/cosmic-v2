@@ -993,7 +993,7 @@ ${breakdownSummary}
           // 如果解析失败，显示原始响应并提供重试选项
           console.log('功能清单解析失败，原始响应:', response.data.rawResponse?.substring(0, 500));
           console.log('解析详情:', response.data.parseDetails);
-          
+
           // 构建详细的错误信息
           let errorDetail = '';
           if (response.data.parseDetails) {
@@ -1011,7 +1011,7 @@ ${breakdownSummary}
               }
             });
           }
-          
+
           setMessages(prev => [...prev, {
             role: 'assistant',
             content: `## 📋 AI分析结果\n\n${response.data.rawResponse.substring(0, 1000)}${response.data.rawResponse.length > 1000 ? '\n\n...(完整内容请查看控制台)' : ''}\n\n---\n\n⚠️ **自动解析失败**\n\n系统尝试了多种解析策略但均未成功。${errorDetail}\n\n**可能的原因：**\n- AI返回的JSON格式不规范\n- 响应中包含了额外的说明文字\n- 网络传输过程中数据异常\n\n**建议操作：**\n1. 🔄 点击"重新分析"按钮重试（AI可能会返回不同格式）\n2. 🔧 检查后端控制台日志，查看详细的解析错误\n3. 📝 如果持续失败，请联系技术支持并提供上述AI响应内容`
@@ -1054,6 +1054,7 @@ ${breakdownSummary}
 
     let allTableData = [];
     let round = 1;
+    let processedIndex = 0;  // ⚠️ 新增：跟踪已处理的功能索引位置
     // 批次大小与后端保持一致（10个），计算总批次数
     const batchSize = 10;
     const totalBatches = Math.ceil(selectedFunctions.length / batchSize);
@@ -1076,12 +1077,19 @@ ${breakdownSummary}
           }];
         });
 
+        // ⚠️ 调试日志：输出请求前的索引位置
+        console.log(`[前端] 第${round}轮请求, processedIndex=${processedIndex}`);
+
         const response = await axios.post('/api/split-from-function-list', {
           documentContent: documentContent,
           confirmedFunctions: selectedFunctions,
           previousResults: allTableData,
-          round: round
+          round: round,
+          processedIndex: processedIndex  // ⚠️ 新增：传递已处理的索引位置
         });
+
+        // ⚠️ 调试日志：输出响应中的索引信息
+        console.log(`[前端] 第${round}轮响应, nextProcessedIndex=${response.data.nextProcessedIndex}, currentBatch=${response.data.currentBatch}`);
 
         if (response.data.success) {
           const reply = response.data.reply;
@@ -1106,15 +1114,15 @@ ${breakdownSummary}
                 if (deduplicatedNewData.length > 0) {
                   allTableData = [...allTableData, ...deduplicatedNewData];
                   setTableData(allTableData);
-                  
+
                   // 显示本批处理的功能和实际拆分出的功能
                   const newFunctions = [...new Set(deduplicatedNewData.map(r => r.functionalProcess))];
                   console.log(`第${round}轮: 预期处理 ${response.data.currentBatch} 个功能，实际拆出 ${newFunctions.length} 个功能`);
                   console.log('实际拆出的功能:', newFunctions);
-                  
+
                   if (response.data.currentBatchFunctions && newFunctions.length < response.data.currentBatchFunctions.length) {
-                    console.warn('⚠️ 部分功能未拆分:', 
-                      response.data.currentBatchFunctions.filter(name => 
+                    console.warn('⚠️ 部分功能未拆分:',
+                      response.data.currentBatchFunctions.filter(name =>
                         !newFunctions.some(fn => fn.includes(name) || name.includes(fn))
                       )
                     );
@@ -1154,6 +1162,9 @@ ${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能
             break;
           }
 
+          // ⚠️ 修复循环拆分问题：更新已处理的索引位置
+          // 优先使用后端返回的nextProcessedIndex，确保前后端状态同步
+          processedIndex = response.data.nextProcessedIndex || (processedIndex + (response.data.currentBatch || batchSize));
           round++;
         } else {
           throw new Error(response.data.error || '拆分失败');

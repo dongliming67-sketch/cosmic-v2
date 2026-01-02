@@ -749,17 +749,17 @@ function cleanupAIResponse(reply) {
  */
 function smartChunkDocument(content, maxChunkSize = 6000) {
   const chunks = [];
-  
+
   // 如果文档较小，直接返回
   if (content.length <= maxChunkSize) {
     return [{ content, chunkIndex: 0, totalChunks: 1, isComplete: true }];
   }
-  
+
   console.log(`\n${'='.repeat(60)}`);
   console.log(`📄 文档分块处理开始`);
   console.log(`文档总长度: ${content.length} 字符`);
   console.log(`每块大小: ${maxChunkSize} 字符`);
-  
+
   // 尝试按章节分割（识别常见的章节标记）
   const sectionPatterns = [
     /\n#+\s+.+/g,  // Markdown标题
@@ -767,7 +767,7 @@ function smartChunkDocument(content, maxChunkSize = 6000) {
     /\n\d+[\.、]\s+.+/g,  // 数字标题
     /\n[一二三四五六七八九十]+[、．].+/g  // 中文数字标题
   ];
-  
+
   let sections = [];
   for (const pattern of sectionPatterns) {
     const matches = [...content.matchAll(pattern)];
@@ -777,18 +777,18 @@ function smartChunkDocument(content, maxChunkSize = 6000) {
       break;
     }
   }
-  
+
   if (sections.length > 0) {
     // 按章节分块
     let lastIndex = 0;
     for (let i = 0; i < sections.length; i++) {
       const currentSection = sections[i];
       const nextSection = sections[i + 1];
-      
+
       const start = lastIndex;
       const end = nextSection ? nextSection.index : content.length;
       const sectionContent = content.substring(start, end);
-      
+
       // 如果单个章节过大，需要进一步拆分
       if (sectionContent.length > maxChunkSize) {
         const subChunks = splitLargeSection(sectionContent, maxChunkSize);
@@ -796,7 +796,7 @@ function smartChunkDocument(content, maxChunkSize = 6000) {
       } else {
         chunks.push({ content: sectionContent, size: sectionContent.length });
       }
-      
+
       lastIndex = currentSection.index;
     }
   } else {
@@ -804,7 +804,7 @@ function smartChunkDocument(content, maxChunkSize = 6000) {
     console.log('未识别到章节标记，按段落智能分割');
     const paragraphs = content.split(/\n\n+/);
     let currentChunk = '';
-    
+
     for (const para of paragraphs) {
       if (currentChunk.length + para.length > maxChunkSize && currentChunk.length > 0) {
         chunks.push({ content: currentChunk, size: currentChunk.length });
@@ -813,12 +813,12 @@ function smartChunkDocument(content, maxChunkSize = 6000) {
         currentChunk += (currentChunk ? '\n\n' : '') + para;
       }
     }
-    
+
     if (currentChunk) {
       chunks.push({ content: currentChunk, size: currentChunk.length });
     }
   }
-  
+
   // 为每个分块添加元数据
   const totalChunks = chunks.length;
   const result = chunks.map((chunk, index) => ({
@@ -828,23 +828,23 @@ function smartChunkDocument(content, maxChunkSize = 6000) {
     size: chunk.size || chunk.content.length,
     isComplete: false
   }));
-  
+
   // 添加重叠区域，确保不漏掉边界功能
   for (let i = 0; i < result.length - 1; i++) {
     const overlapSize = 500;  // 重叠500字符
     const currentContent = result[i].content;
     const nextContent = result[i + 1].content;
-    
+
     // 将下一块的开头加到当前块的结尾
     result[i].overlapNext = nextContent.substring(0, Math.min(overlapSize, nextContent.length));
   }
-  
+
   console.log(`文档已分为 ${totalChunks} 块`);
   result.forEach((chunk, i) => {
     console.log(`  块${i + 1}: ${chunk.size} 字符${chunk.overlapNext ? ' (含重叠)' : ''}`);
   });
   console.log('='.repeat(60) + '\n');
-  
+
   return result;
 }
 
@@ -855,7 +855,7 @@ function splitLargeSection(sectionContent, maxSize) {
   const chunks = [];
   const sentences = sectionContent.split(/([。！？\n]+)/);
   let currentChunk = '';
-  
+
   for (let i = 0; i < sentences.length; i += 2) {
     const sentence = sentences[i] + (sentences[i + 1] || '');
     if (currentChunk.length + sentence.length > maxSize && currentChunk.length > 0) {
@@ -865,11 +865,11 @@ function splitLargeSection(sectionContent, maxSize) {
       currentChunk += sentence;
     }
   }
-  
+
   if (currentChunk) {
     chunks.push({ content: currentChunk, size: currentChunk.length });
   }
-  
+
   return chunks;
 }
 
@@ -892,7 +892,7 @@ async function extractFunctionList(req, res) {
     }
 
     const { client, model, useGeminiSDK, useGroqSDK, provider } = clientConfig;
-    
+
     console.log(`\n${'='.repeat(80)}`);
     console.log(`🚀 功能清单提取开始`);
     console.log(`文档长度: ${documentContent.length} 字符`);
@@ -900,10 +900,10 @@ async function extractFunctionList(req, res) {
     console.log(`最大迭代: ${maxIterations} 轮`);
     console.log(`AI提供商: ${provider}`);
     console.log('='.repeat(80) + '\n');
-    
+
     // 判断是否需要分块处理
     const needChunking = enableChunking && documentContent.length > 8000;
-    
+
     if (needChunking) {
       // 大文档分块处理
       console.log('📄 检测到大文档，启动分块处理模式...');
@@ -912,7 +912,7 @@ async function extractFunctionList(req, res) {
         clientConfig,
         maxIterations
       );
-      
+
       return res.json({
         success: true,
         functionList,
@@ -921,7 +921,7 @@ async function extractFunctionList(req, res) {
         totalChunks: functionList._metadata?.totalChunks || 0
       });
     }
-    
+
     // 小文档直接处理（保持原有逻辑）
     console.log('📄 文档大小适中，使用标准处理模式...');
 
@@ -1557,12 +1557,12 @@ ${documentContent}
     // 尝试解析JSON - 增强版解析逻辑
     let functionList = null;
     let parseDetails = { attempts: [], success: false };
-    
+
     try {
       // 提取JSON部分 - 使用多种匹配策略
       let jsonStr = null;
       let extractMethod = '';
-      
+
       // 策略1：匹配 ```json ... ``` 代码块（非贪婪匹配）
       const jsonBlockMatch = reply.match(/```json\s*([\s\S]*?)```/);
       if (jsonBlockMatch && jsonBlockMatch[1]) {
@@ -1570,7 +1570,7 @@ ${documentContent}
         extractMethod = 'json代码块';
         parseDetails.attempts.push({ method: extractMethod, found: true });
       }
-      
+
       // 策略2：匹配 ``` ... ``` 代码块（可能没有json标记）
       if (!jsonStr) {
         const codeBlockMatch = reply.match(/```\s*([\s\S]*?)```/);
@@ -1580,7 +1580,7 @@ ${documentContent}
           parseDetails.attempts.push({ method: extractMethod, found: true });
         }
       }
-      
+
       // 策略3：直接匹配最外层的 { ... } 对象（使用更智能的括号匹配）
       if (!jsonStr) {
         const firstBrace = reply.indexOf('{');
@@ -1598,7 +1598,7 @@ ${documentContent}
               }
             }
           }
-          
+
           if (lastBrace !== -1) {
             jsonStr = reply.substring(firstBrace, lastBrace + 1);
             extractMethod = '直接括号匹配';
@@ -1606,7 +1606,7 @@ ${documentContent}
           }
         }
       }
-      
+
       if (jsonStr) {
         // 清理JSON字符串中的常见问题
         const originalLength = jsonStr.length;
@@ -1625,10 +1625,10 @@ ${documentContent}
           // 修复可能的转义问题
           .replace(/\\\\n/g, '\\n')
           .trim();
-        
+
         console.log(`功能清单提取 - 提取方法: ${extractMethod}, 原始长度: ${originalLength}, 清理后长度: ${jsonStr.length}`);
         console.log('功能清单提取 - JSON预览:', jsonStr.substring(0, 200) + '...');
-        
+
         try {
           functionList = JSON.parse(jsonStr);
           parseDetails.success = true;
@@ -1637,7 +1637,7 @@ ${documentContent}
         } catch (strictError) {
           console.log('功能清单提取 - 标准JSON解析失败:', strictError.message);
           parseDetails.attempts.push({ method: '标准解析', error: strictError.message });
-          
+
           // 尝试更宽松的解析
           try {
             let relaxedJson = jsonStr
@@ -1645,7 +1645,7 @@ ${documentContent}
               .replace(/([{,]\s*)([a-zA-Z_$][\w$]*)\s*:/g, '$1"$2":')  // 无引号的key加引号
               .replace(/:\s*'([^']*)'/g, ': "$1"')  // 单引号值转双引号
               .replace(/""/g, '"');  // 修复双引号问题
-            
+
             functionList = JSON.parse(relaxedJson);
             parseDetails.success = true;
             parseDetails.method = extractMethod + '(宽松模式)';
@@ -1653,12 +1653,12 @@ ${documentContent}
           } catch (relaxedError) {
             console.log('功能清单提取 - 宽松模式解析失败:', relaxedError.message);
             parseDetails.attempts.push({ method: '宽松解析', error: relaxedError.message });
-            
+
             // 尝试修复截断的JSON
             try {
               console.log('功能清单提取 - 尝试修复截断的JSON');
               let repairedJson = jsonStr;
-              
+
               // 检查是否在字符串中间被截断（最后一个字符不是 } ] " ）
               if (!repairedJson.match(/[}\]"]\s*$/)) {
                 // 如果在字符串值中被截断，尝试补全引号
@@ -1670,13 +1670,13 @@ ${documentContent}
                   console.log('补全了缺失的引号');
                 }
               }
-              
+
               // 统计未闭合的括号
               let openBraces = 0, openBrackets = 0;
               let inString = false;
               for (let i = 0; i < repairedJson.length; i++) {
                 const char = repairedJson[i];
-                if (char === '"' && (i === 0 || repairedJson[i-1] !== '\\')) {
+                if (char === '"' && (i === 0 || repairedJson[i - 1] !== '\\')) {
                   inString = !inString;
                 }
                 if (!inString) {
@@ -1686,24 +1686,24 @@ ${documentContent}
                   if (char === ']') openBrackets--;
                 }
               }
-              
+
               // 移除可能的不完整项（最后一个逗号后的内容）
               if (openBraces > 0 || openBrackets > 0) {
                 const lastComma = repairedJson.lastIndexOf(',');
                 const lastCloseBrace = repairedJson.lastIndexOf('}');
                 const lastCloseBracket = repairedJson.lastIndexOf(']');
                 const lastClose = Math.max(lastCloseBrace, lastCloseBracket);
-                
+
                 if (lastComma > lastClose) {
                   // 有一个逗号在最后一个闭合括号之后，说明后面的内容可能不完整
                   repairedJson = repairedJson.substring(0, lastComma);
                   console.log('移除了不完整的最后一项');
-                  
+
                   // 重新计算括号
                   openBraces = 0; openBrackets = 0; inString = false;
                   for (let i = 0; i < repairedJson.length; i++) {
                     const char = repairedJson[i];
-                    if (char === '"' && (i === 0 || repairedJson[i-1] !== '\\')) {
+                    if (char === '"' && (i === 0 || repairedJson[i - 1] !== '\\')) {
                       inString = !inString;
                     }
                     if (!inString) {
@@ -1715,11 +1715,11 @@ ${documentContent}
                   }
                 }
               }
-              
+
               // 补全缺失的闭合括号
               console.log(`需要补全: ${openBrackets} 个], ${openBraces} 个}`);
               repairedJson += ']'.repeat(openBrackets) + '}'.repeat(openBraces);
-              
+
               functionList = JSON.parse(repairedJson);
               parseDetails.success = true;
               parseDetails.method = extractMethod + '(修复模式)';
@@ -1743,7 +1743,7 @@ ${documentContent}
     if (!functionList) {
       console.log('功能清单提取 - JSON解析失败，尝试从纯文本提取功能列表');
       parseDetails.attempts.push({ method: '纯文本提取', started: true });
-      
+
       functionList = extractFunctionListFromText(finalReply);
       if (functionList && functionList.modules && functionList.modules.length > 0) {
         parseDetails.success = true;
@@ -1754,7 +1754,7 @@ ${documentContent}
         parseDetails.attempts.push({ method: '纯文本提取', success: false });
       }
     }
-    
+
     // 记录解析详情到响应中，便于调试
     if (!functionList) {
       console.error('功能清单提取 - 所有解析策略均失败');
@@ -1766,7 +1766,7 @@ ${documentContent}
     if (functionList) {
       console.log('\n🔍 检测并修正泛化功能名称...');
       functionList = validateAndFixFunctionNames(functionList);
-      
+
       // 检查质量
       const qualityIssues = checkFunctionListQuality(functionList);
       if (qualityIssues.length > 0) {
@@ -1795,23 +1795,23 @@ ${documentContent}
  */
 async function extractFromLargeDocument(documentContent, clientConfig, maxIterations) {
   const { client, model, useGeminiSDK, useGroqSDK, provider } = clientConfig;
-  
+
   // 1. 智能分块
   const chunks = smartChunkDocument(documentContent, 6000);
   console.log(`\n📦 开始处理 ${chunks.length} 个文档块...\n`);
-  
+
   // 2. 对每个块进行功能提取
   const allFunctionsPerChunk = [];
-  
+
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
     console.log(`\n${'─'.repeat(60)}`);
     console.log(`🔍 处理第 ${i + 1}/${chunks.length} 块 (${chunk.size} 字符)`);
     console.log('─'.repeat(60));
-    
+
     // 构建针对当前块的提示词（简化版，聚焦当前块）
     const chunkPrompt = buildChunkExtractionPrompt(chunk, i + 1, chunks.length);
-    
+
     // 调用AI进行功能提取
     let completion = null;
     try {
@@ -1836,9 +1836,9 @@ async function extractFromLargeDocument(documentContent, clientConfig, maxIterat
           max_tokens: 12000
         });
       }
-      
+
       const reply = completion.choices[0].message.content;
-      
+
       // 多轮迭代补充当前块的功能（如果启用）
       let finalReply = reply;
       if (maxIterations > 1) {
@@ -1850,50 +1850,50 @@ async function extractFromLargeDocument(documentContent, clientConfig, maxIterat
           maxIterations - 1
         );
       }
-      
+
       // 解析功能列表
       const chunkFunctions = parseFunctionListFromResponse(finalReply);
       allFunctionsPerChunk.push(chunkFunctions);
-      
+
       console.log(`  ✅ 当前块识别到 ${chunkFunctions.totalFunctions} 个功能`);
-      
+
     } catch (error) {
       console.error(`  ❌ 处理第 ${i + 1} 块失败:`, error.message);
       allFunctionsPerChunk.push({ modules: [], totalFunctions: 0 });
     }
   }
-  
+
   // 3. 合并所有块的结果
   console.log(`\n${'='.repeat(60)}`);
   console.log('🔗 合并所有块的功能清单...');
   const mergedFunctionList = mergeFunctionLists(allFunctionsPerChunk);
-  
+
   // 4. 去重和质量检查
   console.log('🧹 去重和质量检查...');
   let finalFunctionList = deduplicateAndValidate(mergedFunctionList);
-  
+
   // 4.5 验证并修正泛化功能名称
   console.log('🔍 检测并修正泛化功能名称...');
   finalFunctionList = validateAndFixFunctionNames(finalFunctionList);
-  
+
   // 检查质量
   const qualityIssues = checkFunctionListQuality(finalFunctionList);
   if (qualityIssues.length > 0) {
     console.log('\n⚠️ 功能列表质量问题:');
     qualityIssues.forEach(issue => console.log('  - ' + issue));
   }
-  
+
   // 5. 添加元数据
   finalFunctionList._metadata = {
     totalChunks: chunks.length,
     processedAt: new Date().toISOString(),
     mode: 'chunked-processing'
   };
-  
+
   console.log(`\n✅ 大文档处理完成！`);
   console.log(`总计识别功能: ${finalFunctionList.totalFunctions} 个`);
   console.log('='.repeat(60) + '\n');
-  
+
   return finalFunctionList;
 }
 
@@ -1990,19 +1990,19 @@ ${chunk.overlapNext ? '\n[下一块开头预览]：' + chunk.overlapNext : ''}
 async function iterativeEnhancement(documentContent, previousResponse, clientConfig, iterations) {
   const { client, model, useGeminiSDK, useGroqSDK } = clientConfig;
   let currentResponse = previousResponse;
-  
+
   for (let i = 0; i < iterations; i++) {
     console.log(`\n  📝 第 ${i + 1}/${iterations} 轮补充迭代...`);
-    
+
     // 解析当前已识别的功能
     const currentFunctions = parseFunctionListFromResponse(currentResponse);
     const functionNames = currentFunctions.modules
       .flatMap(m => m.functions || [])
       .map(f => f.name)
       .join('、');
-    
+
     console.log(`  当前已识别: ${currentFunctions.totalFunctions} 个功能`);
-    
+
     // 构建补充提示词
     const enhancementPrompt = `你刚才识别了以下功能：
 
@@ -2037,7 +2037,7 @@ ${functionNames}
 
 文档内容（前5000字）：
 ${documentContent.substring(0, 5000)}`;
-    
+
     let completion = null;
     try {
       if (useGeminiSDK) {
@@ -2061,15 +2061,15 @@ ${documentContent.substring(0, 5000)}`;
           max_tokens: 8000
         });
       }
-      
+
       const enhancementReply = completion.choices[0].message.content;
-      
+
       // 检查是否完成
       if (enhancementReply.includes('"noMoreFunctions"') || enhancementReply.includes('没有遗漏')) {
         console.log(`  ✅ AI认为已经完整，停止迭代`);
         break;
       }
-      
+
       // 合并补充的功能
       const enhancedFunctions = parseFunctionListFromResponse(enhancementReply);
       if (enhancedFunctions.totalFunctions > 0) {
@@ -2078,13 +2078,13 @@ ${documentContent.substring(0, 5000)}`;
       } else {
         console.log(`  ℹ️ 本轮未发现新功能`);
       }
-      
+
     } catch (error) {
       console.error(`  ⚠️ 第 ${i + 1} 轮迭代失败:`, error.message);
       break;
     }
   }
-  
+
   return currentResponse;
 }
 
@@ -2094,13 +2094,13 @@ ${documentContent.substring(0, 5000)}`;
 function parseFunctionListFromResponse(response) {
   // 尝试JSON解析
   let functionList = null;
-  
+
   try {
     // 提取JSON
-    const jsonMatch = response.match(/```json\s*([\s\S]*?)```/) || 
-                     response.match(/```\s*([\s\S]*?)```/) ||
-                     response.match(/\{[\s\S]*\}/);
-    
+    const jsonMatch = response.match(/```json\s*([\s\S]*?)```/) ||
+      response.match(/```\s*([\s\S]*?)```/) ||
+      response.match(/\{[\s\S]*\}/);
+
     if (jsonMatch) {
       const jsonStr = jsonMatch[1] || jsonMatch[0];
       functionList = JSON.parse(jsonStr.trim());
@@ -2109,7 +2109,7 @@ function parseFunctionListFromResponse(response) {
     // JSON解析失败，尝试文本提取
     functionList = extractFunctionListFromText(response);
   }
-  
+
   if (!functionList || !functionList.modules) {
     return {
       projectName: '',
@@ -2120,11 +2120,11 @@ function parseFunctionListFromResponse(response) {
       suggestions: []
     };
   }
-  
+
   // 计算总功能数
   functionList.totalFunctions = functionList.modules
     .reduce((sum, m) => sum + (m.functions ? m.functions.length : 0), 0);
-  
+
   return functionList;
 }
 
@@ -2140,13 +2140,13 @@ function mergeFunctionLists(functionLists) {
     timedTasks: [],
     suggestions: []
   };
-  
+
   // 使用Map来合并同名模块
   const moduleMap = new Map();
-  
+
   for (const list of functionLists) {
     if (!list || !list.modules) continue;
-    
+
     // 取第一个非空的项目信息
     if (!merged.projectName && list.projectName) {
       merged.projectName = list.projectName;
@@ -2154,39 +2154,39 @@ function mergeFunctionLists(functionLists) {
     if (!merged.projectDescription && list.projectDescription) {
       merged.projectDescription = list.projectDescription;
     }
-    
+
     // 合并模块和功能
     for (const module of list.modules) {
       if (!module.moduleName) continue;
-      
+
       if (!moduleMap.has(module.moduleName)) {
         moduleMap.set(module.moduleName, {
           moduleName: module.moduleName,
           functions: []
         });
       }
-      
+
       const existingModule = moduleMap.get(module.moduleName);
       if (module.functions && Array.isArray(module.functions)) {
         existingModule.functions.push(...module.functions);
       }
     }
-    
+
     // 合并定时任务
     if (list.timedTasks && Array.isArray(list.timedTasks)) {
       merged.timedTasks.push(...list.timedTasks);
     }
-    
+
     // 合并建议
     if (list.suggestions && Array.isArray(list.suggestions)) {
       merged.suggestions.push(...list.suggestions);
     }
   }
-  
+
   merged.modules = Array.from(moduleMap.values());
   merged.totalFunctions = merged.modules
     .reduce((sum, m) => sum + (m.functions ? m.functions.length : 0), 0);
-  
+
   return merged;
 }
 
@@ -2195,35 +2195,35 @@ function mergeFunctionLists(functionLists) {
  */
 function deduplicateAndValidate(functionList) {
   const seen = new Set();
-  
+
   for (const module of functionList.modules) {
     if (!module.functions) continue;
-    
+
     // 去重功能
     const uniqueFunctions = [];
     for (const func of module.functions) {
       const normalizedName = func.name
         .replace(/[\s\-\_&（）()]/g, '')
         .toLowerCase();
-      
+
       if (!seen.has(normalizedName)) {
         seen.add(normalizedName);
         uniqueFunctions.push(func);
       }
     }
-    
+
     module.functions = uniqueFunctions;
-    
+
     // 重新分配ID
     module.functions.forEach((func, index) => {
       func.id = index + 1;
     });
   }
-  
+
   // 重新计算总数
   functionList.totalFunctions = functionList.modules
     .reduce((sum, m) => sum + (m.functions ? m.functions.length : 0), 0);
-  
+
   // 去重定时任务
   if (functionList.timedTasks) {
     const uniqueTasks = [];
@@ -2236,7 +2236,7 @@ function deduplicateAndValidate(functionList) {
     }
     functionList.timedTasks = uniqueTasks;
   }
-  
+
   return functionList;
 }
 
@@ -2266,11 +2266,11 @@ function validateAndFixFunctionNames(functionList) {
     '可视化展示': ['折线图展示', '柱状图展示', '饼图展示'],
     '数据展示': ['数据列表展示', '数据图表展示', '数据详情展示']
   };
-  
+
   // 复合操作模式检测（正则匹配）
   const compoundOperationPatterns = [
     // "生成XXX表/报表" 模式
-    { 
+    {
       pattern: /生成(.+?)(评估表|报表|表格|报告)/,
       split: (match) => {
         const dataObj = match[1];
@@ -2301,19 +2301,19 @@ function validateAndFixFunctionNames(functionList) {
       }
     }
   ];
-  
+
   let hasGeneric = false;
   const warnings = [];
-  
+
   for (const module of functionList.modules) {
     if (!module.functions) continue;
-    
+
     const expandedFunctions = [];
-    
+
     for (const func of module.functions) {
       let isGeneric = false;
       let expandedNames = null;
-      
+
       // 首先检查复合操作
       let compoundDetected = false;
       for (const pattern of compoundOperationPatterns) {
@@ -2322,10 +2322,10 @@ function validateAndFixFunctionNames(functionList) {
           compoundDetected = true;
           isGeneric = true;
           hasGeneric = true;
-          
+
           const splitNames = pattern.split(match, func.name);
           warnings.push(`⚠️ 检测到复合操作 "${func.name}"，自动拆分为 ${splitNames.length} 个独立功能`);
-          
+
           for (let i = 0; i < splitNames.length; i++) {
             expandedFunctions.push({
               ...func,
@@ -2334,11 +2334,11 @@ function validateAndFixFunctionNames(functionList) {
               description: `${splitNames[i]}功能`
             });
           }
-          
+
           break;
         }
       }
-      
+
       // 如果不是复合操作，再检查泛化词汇
       if (!compoundDetected) {
         for (const [genericTerm, expansions] of Object.entries(genericTerms)) {
@@ -2346,9 +2346,9 @@ function validateAndFixFunctionNames(functionList) {
             isGeneric = true;
             hasGeneric = true;
             expandedNames = expansions;
-            
+
             warnings.push(`⚠️ 检测到泛化功能 "${func.name}"，自动展开为 ${expansions.length} 个具体功能`);
-            
+
             // 将泛化功能展开为多个具体功能
             for (let i = 0; i < expansions.length; i++) {
               expandedFunctions.push({
@@ -2358,18 +2358,18 @@ function validateAndFixFunctionNames(functionList) {
                 description: func.description.replace(genericTerm, expansions[i])
               });
             }
-            
+
             break;
           }
         }
       }
-      
+
       // 如果不是泛化功能，保留原功能
       if (!isGeneric) {
         // 但仍需检查是否只有单个泛化词
         const singleGenericTerms = ['画像', '可视化', '交互', '生成'];
         let needsWarning = false;
-        
+
         for (const term of singleGenericTerms) {
           if (func.name === term || func.name.endsWith(term) && func.name.length < 6) {
             warnings.push(`⚠️ 功能 "${func.name}" 过于简陋，建议明确具体内容`);
@@ -2377,24 +2377,24 @@ function validateAndFixFunctionNames(functionList) {
             break;
           }
         }
-        
+
         expandedFunctions.push(func);
       }
     }
-    
+
     // 替换原功能列表
     module.functions = expandedFunctions;
-    
+
     // 重新分配ID
     module.functions.forEach((func, index) => {
       func.id = index + 1;
     });
   }
-  
+
   // 重新计算总功能数
   functionList.totalFunctions = functionList.modules
     .reduce((sum, m) => sum + (m.functions ? m.functions.length : 0), 0);
-  
+
   if (hasGeneric) {
     console.log('\n' + '='.repeat(60));
     console.log('🔧 泛化功能自动修正');
@@ -2403,7 +2403,7 @@ function validateAndFixFunctionNames(functionList) {
     console.log(`修正后总功能数: ${functionList.totalFunctions}`);
     console.log('='.repeat(60) + '\n');
   }
-  
+
   return functionList;
 }
 
@@ -2412,18 +2412,18 @@ function validateAndFixFunctionNames(functionList) {
  */
 function checkFunctionListQuality(functionList) {
   const issues = [];
-  
+
   // 检查功能总数
   if (functionList.totalFunctions < 10) {
     issues.push(`功能数量过少（${functionList.totalFunctions}个），可能识别不完整`);
   }
-  
+
   // 检查泛化词汇
   const forbiddenWords = ['画像', '可视化', '交互', '数据业务'];
-  
+
   for (const module of functionList.modules) {
     if (!module.functions) continue;
-    
+
     for (const func of module.functions) {
       // 检查是否包含禁止词汇（单独使用）
       for (const word of forbiddenWords) {
@@ -2431,19 +2431,19 @@ function checkFunctionListQuality(functionList) {
           issues.push(`功能 "${func.name}" 过于泛化，必须明确具体内容`);
         }
       }
-      
+
       // 检查功能名称长度（过短通常意味着泛化）
       if (func.name.length < 4) {
         issues.push(`功能 "${func.name}" 名称过短，可能不够具体`);
       }
-      
+
       // 检查是否只包含"数据"而不明确对象
       if (func.name.includes('数据') && !func.name.match(/(用户数|流量|小区|基站|告警|配置)/)) {
         issues.push(`功能 "${func.name}" 包含"数据"但未明确具体对象`);
       }
     }
   }
-  
+
   return issues;
 }
 
@@ -2479,11 +2479,11 @@ function extractFunctionListFromText(text) {
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
-      
+
       // 识别模块标题（通常是 ## 或 ### 开头，或者包含"模块"字样）
-      const moduleMatch = line.match(/^#{1,3}\s*(.+模块.*)/) || 
-                          line.match(/^#{1,3}\s*(\d+[\.、]\s*.+)/) ||
-                          line.match(/所属模块[：:]\s*(.+)/);
+      const moduleMatch = line.match(/^#{1,3}\s*(.+模块.*)/) ||
+        line.match(/^#{1,3}\s*(\d+[\.、]\s*.+)/) ||
+        line.match(/所属模块[：:]\s*(.+)/);
       if (moduleMatch) {
         const moduleName = moduleMatch[1].replace(/^[\d\.、\s]+/, '').trim();
         if (moduleName && moduleName.length > 1 && moduleName.length < 50) {
@@ -2504,16 +2504,16 @@ function extractFunctionListFromText(text) {
         if (funcName && funcName.length > 1) {
           // 查找触发方式（可能在下一行或同一行）
           let triggerType = '用户触发';
-          const triggerMatch = line.match(/触发方式[：:]\s*(.+)/) || 
-                               (lines[i+1] && lines[i+1].match(/触发方式[：:]\s*(.+)/));
+          const triggerMatch = line.match(/触发方式[：:]\s*(.+)/) ||
+            (lines[i + 1] && lines[i + 1].match(/触发方式[：:]\s*(.+)/));
           if (triggerMatch) {
             triggerType = triggerMatch[1].trim();
           }
 
           // 查找描述
           let description = '';
-          const descMatch = (lines[i+1] && lines[i+1].match(/(?:描述|简要描述)[：:]\s*(.+)/)) ||
-                           (lines[i+2] && lines[i+2].match(/(?:描述|简要描述)[：:]\s*(.+)/));
+          const descMatch = (lines[i + 1] && lines[i + 1].match(/(?:描述|简要描述)[：:]\s*(.+)/)) ||
+            (lines[i + 2] && lines[i + 2].match(/(?:描述|简要描述)[：:]\s*(.+)/));
           if (descMatch) {
             description = descMatch[1].trim();
           }
@@ -2540,16 +2540,16 @@ function extractFunctionListFromText(text) {
         const itemText = listItemMatch[1].trim();
         // 检查是否像是功能名称（包含动词或"功能"字样）
         const actionVerbs = ['创建', '查询', '修改', '删除', '导入', '导出', '统计', '汇总', '推送', '监控', '分析', '生成', '接收', '发送', '上传', '下载'];
-        const isFunction = actionVerbs.some(verb => itemText.includes(verb)) || 
-                          itemText.includes('功能') ||
-                          itemText.includes('数据') ||
-                          itemText.match(/[\u4e00-\u9fa5]{2,}(?:入库|解析|处理|计算|展示|可视化)/);
-        
+        const isFunction = actionVerbs.some(verb => itemText.includes(verb)) ||
+          itemText.includes('功能') ||
+          itemText.includes('数据') ||
+          itemText.match(/[\u4e00-\u9fa5]{2,}(?:入库|解析|处理|计算|展示|可视化)/);
+
         if (isFunction && itemText.length > 2 && itemText.length < 50) {
           // 判断触发类型
           let triggerType = '用户触发';
-          if (itemText.includes('定时') || itemText.includes('周期') || itemText.includes('自动') || 
-              itemText.includes('每天') || itemText.includes('每周') || itemText.includes('汇总')) {
+          if (itemText.includes('定时') || itemText.includes('周期') || itemText.includes('自动') ||
+            itemText.includes('每天') || itemText.includes('每周') || itemText.includes('汇总')) {
             triggerType = '时钟触发';
           } else if (itemText.includes('接收') || itemText.includes('推送') || itemText.includes('接口')) {
             triggerType = '接口触发';
@@ -2573,7 +2573,7 @@ function extractFunctionListFromText(text) {
 
       // 格式3: 识别定时任务
       const timerMatch = line.match(/(?:定时任务|周期任务)[：:]\s*(.+)/) ||
-                        line.match(/每(?:天|周|月|小时|分钟).+(?:执行|运行|汇总|统计)/);
+        line.match(/每(?:天|周|月|小时|分钟).+(?:执行|运行|汇总|统计)/);
       if (timerMatch) {
         const taskName = timerMatch[1] || line;
         result.timedTasks.push({
@@ -2621,7 +2621,16 @@ function extractFunctionListFromText(text) {
 // ═══════════════════════════════════════════════════════════
 async function splitFromFunctionList(req, res) {
   try {
-    const { documentContent, confirmedFunctions, previousResults = [], round = 1 } = req.body;
+    const { documentContent, confirmedFunctions, previousResults = [], round = 1, processedIndex = 0 } = req.body;
+
+    // ⚠️ 调试日志：检查接收到的参数
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`🔍 调试信息：接收到的参数`);
+    console.log(`  - round: ${round}`);
+    console.log(`  - processedIndex: ${processedIndex}`);
+    console.log(`  - confirmedFunctions.length: ${confirmedFunctions?.length || 0}`);
+    console.log(`  - previousResults.length: ${previousResults?.length || 0}`);
+    console.log('='.repeat(60));
 
     if (!confirmedFunctions || confirmedFunctions.length === 0) {
       return res.status(400).json({ error: '请提供确认的功能清单' });
@@ -2634,22 +2643,22 @@ async function splitFromFunctionList(req, res) {
 
     const { client, model, useGeminiSDK, useGroqSDK, provider } = clientConfig;
 
-    // 已完成的功能
+    // 已完成的功能（用于显示）
     const completedFunctions = previousResults.map(r => r.functionalProcess).filter(Boolean);
     const uniqueCompleted = [...new Set(completedFunctions)];
 
-    // 待拆分的功能（使用更严格的匹配逻辑，避免误判）
-    const pendingFunctions = confirmedFunctions.filter(fn => {
-      // 检查是否已经完成（使用更严格的匹配）
-      const isCompleted = uniqueCompleted.some(completed => {
-        // 完全匹配（忽略空格和特殊符号）
-        const normalizedFn = fn.name.replace(/[\s&\-\_]/g, '').toLowerCase();
-        const normalizedCompleted = completed.replace(/[\s&\-\_]/g, '').toLowerCase();
-        // 只有完全相同才算已完成，不使用includes
-        return normalizedFn === normalizedCompleted;
-      });
-      return !isCompleted;
-    });
+    // ⚠️ 修复循环拆分问题：使用索引位置而不是名称匹配来确定待处理功能
+    // 之前的问题：AI返回的功能名可能与确认的功能名有细微差异，导致无法正确判断已完成状态
+    // 解决方案：使用processedIndex记录已处理到的位置，按顺序处理，避免重复
+
+    // 每轮处理功能数量
+    const batchSize = 10;
+
+    // 直接按索引获取待处理的功能，而不是通过名称匹配
+    const startIndex = processedIndex;
+    const pendingFunctions = confirmedFunctions.slice(startIndex);
+
+    console.log(`📊 计算结果：startIndex=${startIndex}, pendingFunctions.length=${pendingFunctions.length}`);
 
     if (pendingFunctions.length === 0) {
       return res.json({
@@ -2660,16 +2669,16 @@ async function splitFromFunctionList(req, res) {
       });
     }
 
-    // 每轮处理功能数量（平衡速度和质量）
-    const batchSize = 10;  // 从5增加到10，加快处理速度
+
+    // 每轮处理功能数量（平衡速度和质量）- 已在上方定义batchSize
     const currentBatch = pendingFunctions.slice(0, batchSize);
-    const totalBatches = Math.ceil(pendingFunctions.length / batchSize);
-    const currentBatchNumber = Math.ceil((confirmedFunctions.length - pendingFunctions.length) / batchSize) + 1;
-    
+    const totalBatches = Math.ceil(confirmedFunctions.length / batchSize);  // 使用总功能数计算总批次
+    const currentBatchNumber = Math.floor(startIndex / batchSize) + 1;  // 使用startIndex计算当前批次号
+
     console.log(`\n${'='.repeat(60)}`);
     console.log(`批次 ${currentBatchNumber}/${totalBatches}: 处理 ${currentBatch.length} 个功能`);
     console.log(`总确认功能数: ${confirmedFunctions.length}`);
-    console.log(`已完成: ${uniqueCompleted.length}, 待处理: ${pendingFunctions.length}`);
+    console.log(`startIndex: ${startIndex}, 待处理: ${pendingFunctions.length}`);
     console.log(`\n本批功能列表:`);
     currentBatch.forEach((f, idx) => {
       console.log(`  ${idx + 1}. ${f.name}`);
@@ -2810,9 +2819,13 @@ ${documentContent.substring(0, 5000)}${documentContent.length > 5000 ? '\n...(�
     // 判断是否完成
     const isDone = pendingFunctions.length <= batchSize;
 
+    // 计算下一轮的起始索引
+    const nextProcessedIndex = startIndex + currentBatch.length;
+
     const remainingCount = Math.max(0, pendingFunctions.length - batchSize);
     console.log(`\n批次 ${currentBatchNumber}/${totalBatches} 完成`);
-    console.log(`已完成功能数: ${uniqueCompleted.length + currentBatch.length}/${confirmedFunctions.length}`);
+    console.log(`已处理索引范围: ${startIndex} - ${nextProcessedIndex - 1}`);
+    console.log(`已完成功能数: ${nextProcessedIndex}/${confirmedFunctions.length}`);
     console.log(`剩余待处理: ${remainingCount} 个功能\n`);
 
     res.json({
@@ -2827,6 +2840,7 @@ ${documentContent.substring(0, 5000)}${documentContent.length > 5000 ? '\n...(�
       totalFunctions: confirmedFunctions.length,
       batchNumber: currentBatchNumber,
       totalBatches: totalBatches,
+      nextProcessedIndex: nextProcessedIndex,  // ⚠️ 新增：返回下一轮的起始索引
       provider
     });
   } catch (error) {
