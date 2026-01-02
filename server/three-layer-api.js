@@ -1549,6 +1549,10 @@ ${documentContent}
       finalReply = await iterativeEnhancement(
         documentContent,
         reply,
+        clientConfig,
+        maxIterations - 1
+      );
+    }
 
     // 尝试解析JSON - 增强版解析逻辑
     let functionList = null;
