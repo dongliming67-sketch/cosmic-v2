@@ -88,6 +88,11 @@ function App() {
   const [confirmedFunctions, setConfirmedFunctions] = useState([]); // 用户确认的功能列表
   const [isExtractingFunctions, setIsExtractingFunctions] = useState(false); // 是否正在提取功能清单
 
+  // 对话式添加功能相关状态
+  const [showAddFunctionDialog, setShowAddFunctionDialog] = useState(false); // 是否显示对话式添加弹窗
+  const [addFunctionInput, setAddFunctionInput] = useState(''); // 用户输入的需求描述
+  const [isAnalyzingNewFunction, setIsAnalyzingNewFunction] = useState(false); // 是否正在AI分析
+
 
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -932,9 +937,10 @@ ${breakdownSummary}
         content: '🔍 **阶段1：功能清单提取**\n正在分析文档，识别所有功能点...\n\n完成后将显示功能清单供您确认、修改或补充。'
       }]);
 
-      // 调用功能清单提取API
+      // 调用功能清单提取API - 传递用户限制条件
       const response = await axios.post('/api/extract-function-list', {
-        documentContent: content
+        documentContent: content,
+        userGuidelines: guidelines  // 将用户限制条件传递给后端
       }, { signal });
 
       if (response.data.success) {
@@ -1055,6 +1061,7 @@ ${breakdownSummary}
     let allTableData = [];
     let round = 1;
     let processedIndex = 0;  // ⚠️ 新增：跟踪已处理的功能索引位置
+    let allMissedFunctions = [];  // 🔍 收集所有批次中遗漏的功能（用于追补拆分）
     // 批次大小与后端保持一致（10个），计算总批次数
     const batchSize = 10;
     const totalBatches = Math.ceil(selectedFunctions.length / batchSize);
@@ -1119,34 +1126,91 @@ ${breakdownSummary}
                   const newFunctions = [...new Set(deduplicatedNewData.map(r => r.functionalProcess))];
                   console.log(`第${round}轮: 预期处理 ${response.data.currentBatch} 个功能，实际拆出 ${newFunctions.length} 个功能`);
                   console.log('实际拆出的功能:', newFunctions);
-
-                  if (response.data.currentBatchFunctions && newFunctions.length < response.data.currentBatchFunctions.length) {
-                    console.warn('⚠️ 部分功能未拆分:',
-                      response.data.currentBatchFunctions.filter(name =>
-                        !newFunctions.some(fn => fn.includes(name) || name.includes(fn))
-                      )
-                    );
-                  }
                 }
               }
             } catch (parseError) {
               console.log(`功能清单拆分第 ${round} 轮表格解析失败:`, parseError.message);
             }
+
+            // 🔍 收集遗漏功能（用于追补拆分）
+            if (response.data.hasMissedFunctions && response.data.missedFunctions) {
+              const missedInBatch = response.data.missedFunctions;
+              console.warn(`⚠️ 第${round}轮遗漏了 ${missedInBatch.length} 个功能:`, missedInBatch);
+              // 将遗漏功能添加到追补队列（去重）
+              missedInBatch.forEach(missedName => {
+                if (!allMissedFunctions.some(f => f.name === missedName)) {
+                  const originalFunc = selectedFunctions.find(f => f.name === missedName);
+                  if (originalFunc) {
+                    allMissedFunctions.push(originalFunc);
+                  }
+                }
+              });
+            }
           }
 
           if (response.data.isDone) {
+            // 🔄 阶段2.5：追补遗漏功能
+            if (allMissedFunctions.length > 0) {
+              console.log(`\n🔄 发现 ${allMissedFunctions.length} 个遗漏功能，开始追补拆分...`);
+              setMessages(prev => {
+                const filtered = prev.filter(m => !m.content.startsWith('🔄'));
+                return [...filtered, {
+                  role: 'system',
+                  content: `🔄 **追补阶段**\n\n发现 ${allMissedFunctions.length} 个功能在常规批次中未完成拆分，正在追补...`
+                }];
+              });
+
+              // 对遗漏功能进行专门拆分
+              try {
+                const supplementResponse = await axios.post('/api/split-from-function-list', {
+                  documentContent: documentContent,
+                  confirmedFunctions: allMissedFunctions,
+                  previousResults: allTableData,
+                  round: round + 1,
+                  processedIndex: 0  // 从头开始处理遗漏功能
+                });
+
+                if (supplementResponse.data.success && !supplementResponse.data.reply.includes('[ALL_DONE]')) {
+                  const supplementReply = supplementResponse.data.reply;
+                  setMessages(prev => [...prev, {
+                    role: 'assistant',
+                    content: `**追补拆分结果：**\n\n${supplementReply}`
+                  }]);
+
+                  // 解析追补数据
+                  try {
+                    const supplementTableRes = await axios.post('/api/parse-table', { markdown: supplementReply });
+                    if (supplementTableRes.data.success && supplementTableRes.data.tableData.length > 0) {
+                      const supplementRows = supplementTableRes.data.tableData;
+                      const deduplicatedSupplement = deduplicateByFunctionalProcess(allTableData, supplementRows);
+                      if (deduplicatedSupplement.length > 0) {
+                        allTableData = [...allTableData, ...deduplicatedSupplement];
+                        setTableData(allTableData);
+                        console.log(`追补拆分新增 ${deduplicatedSupplement.length} 条数据`);
+                      }
+                    }
+                  } catch (e) {
+                    console.log('追补拆分表格解析失败:', e.message);
+                  }
+                }
+              } catch (e) {
+                console.error('追补拆分请求失败:', e.message);
+              }
+            }
+
             const uniqueFunctions = [...new Set(allTableData.map(r => r.functionalProcess).filter(Boolean))];
             const batchInfo = response.data.totalBatches ? `\n完成批次: ${response.data.totalBatches}/${response.data.totalBatches}` : '';
+            const supplementInfo = allMissedFunctions.length > 0 ? `\n追补功能: ${allMissedFunctions.length}个` : '';
             setMessages(prev => {
               const filtered = prev.filter(m => !m.content.startsWith('🔄'));
               return [...filtered, {
                 role: 'system',
-                content: `✅ **拆分完成！**${batchInfo}
+                content: `✅ **拆分完成！**${batchInfo}${supplementInfo}
 
 **结果统计：**
-- 功能过程数: **${uniqueFunctions.length}** / ${selectedFunctions.length} (应识别)
+- 功能过程数: **${uniqueFunctions.length}** / ${selectedFunctions.length} (原实测)
 - 子过程总数: **${allTableData.length}** (CFP点数)
-- 平均每功能: **${(allTableData.length / uniqueFunctions.length).toFixed(1)}** 个子过程
+- 平均每功能: **${(allTableData.length / Math.max(1, uniqueFunctions.length)).toFixed(1)}** 个子过程
 
 **数据移动类型分布：**
 - 输入(E): ${allTableData.filter(r => r.dataMovementType === 'E').length} 个
@@ -1154,7 +1218,7 @@ ${breakdownSummary}
 - 写入(W): ${allTableData.filter(r => r.dataMovementType === 'W').length} 个
 - 输出(X): ${allTableData.filter(r => r.dataMovementType === 'X').length} 个
 
-${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能未完全拆分，请检查结果' : '✓ 所有功能已拆分完成'}
+${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能未完全拆分，请检查原始 **结果** 或 **"导出Excel"** 查看完整结果。' : '✓ 所有功能已拆分完成'}
 
 点击"查看表格"或"导出Excel"查看完整结果。`
               }];
@@ -1181,8 +1245,14 @@ ${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能
     }
   };
 
-  // 添加新功能到确认列表
+  // 打开对话式添加功能弹窗
   const addNewFunction = () => {
+    setShowAddFunctionDialog(true);
+    setAddFunctionInput('');
+  };
+
+  // 手动添加一个简单的功能（不经过AI分析）
+  const addSimpleFunction = () => {
     const newId = `custom_${Date.now()}`;
     setConfirmedFunctions(prev => [...prev, {
       id: newId,
@@ -1193,6 +1263,54 @@ ${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能
       selected: true,
       isNew: true
     }]);
+    setShowAddFunctionDialog(false);
+  };
+
+  // 对话式AI分析添加功能
+  const analyzeAndAddFunctions = async () => {
+    if (!addFunctionInput.trim()) {
+      showToast('请输入需求描述');
+      return;
+    }
+
+    if (!apiStatus.hasApiKey) {
+      showToast('请先配置API密钥');
+      return;
+    }
+
+    setIsAnalyzingNewFunction(true);
+
+    try {
+      const response = await axios.post('/api/analyze-additional-functions', {
+        userInput: addFunctionInput.trim(),
+        documentContent: documentContent,
+        existingFunctions: confirmedFunctions.map(fn => fn.name)
+      });
+
+      if (response.data.success && response.data.functions && response.data.functions.length > 0) {
+        const newFunctions = response.data.functions.map((fn, idx) => ({
+          id: `ai_${Date.now()}_${idx}`,
+          name: fn.name,
+          triggerType: fn.triggerType || '用户触发',
+          description: fn.description || '',
+          moduleName: fn.moduleName || '自定义',
+          selected: true,
+          isNew: true
+        }));
+
+        setConfirmedFunctions(prev => [...prev, ...newFunctions]);
+        showToast(`✅ AI识别到 ${newFunctions.length} 个新功能`);
+        setShowAddFunctionDialog(false);
+        setAddFunctionInput('');
+      } else {
+        showToast('未识别到新功能，请尝试更详细的描述');
+      }
+    } catch (error) {
+      console.error('AI分析失败:', error);
+      showToast(`分析失败: ${error.response?.data?.error || error.message}`);
+    } finally {
+      setIsAnalyzingNewFunction(false);
+    }
   };
 
   // 更新功能信息
@@ -1778,7 +1896,7 @@ ${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能
                 </div>
                 <div className="flex-1 overflow-y-auto bg-[#FAF9F7] rounded-lg p-3 text-xs text-[#6B6760] leading-relaxed max-h-[300px]">
                   <pre className="whitespace-pre-wrap font-sans">
-                    {documentContent.length > 2000 
+                    {documentContent.length > 2000
                       ? documentContent.substring(0, 2000) + '\n\n... (点击"查看完整内容"查看更多)'
                       : documentContent}
                   </pre>
@@ -2299,14 +2417,57 @@ ${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能
                 ))}
               </div>
 
-              {/* 添加新功能按钮 */}
-              <button
-                onClick={addNewFunction}
-                className="mt-4 w-full p-4 border-2 border-dashed border-gray-300 rounded-xl text-gray-500 hover:border-amber-400 hover:text-amber-600 hover:bg-amber-50 transition-all flex items-center justify-center gap-2"
-              >
-                <Plus className="w-5 h-5" />
-                添加新功能
-              </button>
+              {/* 对话式添加新功能区域 */}
+              <div className="mt-4 p-4 border-2 border-dashed border-gray-300 rounded-xl bg-gray-50 hover:border-amber-300 transition-all">
+                <div className="flex items-center gap-2 mb-3">
+                  <Bot className="w-5 h-5 text-amber-500" />
+                  <span className="font-medium text-gray-700">添加新功能</span>
+                </div>
+
+                <textarea
+                  value={addFunctionInput}
+                  onChange={(e) => setAddFunctionInput(e.target.value)}
+                  placeholder="请描述您要添加的功能需求，例如：&#10;• 我需要一个数据导出功能，支持导出Excel和PDF格式&#10;• 系统需要支持按日期范围查询用户活动数据&#10;• 添加一个定时任务用于每天凌晨汇总前一天的数据"
+                  className="w-full px-4 py-3 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent resize-none bg-white"
+                  rows={4}
+                  disabled={isAnalyzingNewFunction}
+                />
+
+                <div className="flex items-center justify-between mt-3">
+                  <button
+                    onClick={addSimpleFunction}
+                    className="px-3 py-1.5 text-sm text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+                    disabled={isAnalyzingNewFunction}
+                  >
+                    <Plus className="w-4 h-4 inline mr-1" />
+                    直接添加空白功能
+                  </button>
+
+                  <button
+                    onClick={analyzeAndAddFunctions}
+                    disabled={isAnalyzingNewFunction || !addFunctionInput.trim()}
+                    className="px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2 text-sm font-medium"
+                  >
+                    {isAnalyzingNewFunction ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        AI分析中...
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-4 h-4" />
+                        AI智能分析
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {addFunctionInput.trim() && (
+                  <p className="text-xs text-gray-400 mt-2">
+                    💡 提示：AI将根据您的描述自动识别功能点、触发类型和所属模块
+                  </p>
+                )}
+              </div>
             </div>
 
             {/* 底部操作栏 */}

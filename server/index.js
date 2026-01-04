@@ -1393,6 +1393,140 @@ app.post('/api/split-from-function-list', (req, res) => {
   splitFromFunctionList(req, res);
 });
 
+// ========== 对话式添加功能 API ==========
+// 用户输入需求描述，AI智能分析并识别新的功能点
+app.post('/api/analyze-additional-functions', async (req, res) => {
+  try {
+    const { userInput, documentContent = '', existingFunctions = [] } = req.body;
+
+    if (!userInput || !userInput.trim()) {
+      return res.status(400).json({ error: '请提供需求描述' });
+    }
+
+    const clientConfig = getActiveClientConfig();
+    if (!clientConfig) {
+      return res.status(400).json({ error: '请先配置API密钥' });
+    }
+
+    console.log('\n' + '='.repeat(60));
+    console.log('📝 对话式添加功能分析');
+    console.log('用户输入:', userInput);
+    console.log('现有功能数量:', existingFunctions.length);
+    console.log('='.repeat(60));
+
+    const analysisPrompt = `你是一个COSMIC功能点分析专家。用户描述了一些需要添加的功能需求，请根据描述识别并提取功能点。
+
+## 用户需求描述
+${userInput}
+
+${documentContent ? `## 原始文档上下文（参考）
+${documentContent.substring(0, 2000)}...` : ''}
+
+${existingFunctions.length > 0 ? `## 已有功能列表（避免重复）
+${existingFunctions.slice(0, 30).join('、')}` : ''}
+
+## 任务要求
+1. 根据用户描述，识别出所有功能点
+2. 每个功能点必须是具体的、可拆分的操作
+3. 功能名称必须包含：数据对象+操作动作（如"用户数据查询"、"报表Excel导出"）
+4. 避免与已有功能重复
+5. 判断每个功能的触发类型：用户触发、时钟触发、接口触发
+6. 判断每个功能所属的模块
+
+## 关键识别规则
+- "查询"、"搜索"、"筛选" → 识别为查询类功能
+- "导出"、"下载" → 识别为导出类功能
+- "导入"、"上传" → 识别为导入类功能
+- "统计"、"汇总"、"分析" → 识别为统计类功能
+- "定时"、"每天"、"周期" → 触发类型为"时钟触发"
+- "配置"、"设置"、"管理" → 识别为配置管理类功能
+- "新增"、"创建"、"添加" → 识别为新增类功能
+- "修改"、"编辑"、"更新" → 识别为修改类功能
+- "删除"、"移除" → 识别为删除类功能
+
+## 输出格式（严格JSON）
+请直接输出JSON数组，不要添加任何其他文字：
+[
+  {
+    "name": "功能名称（动词+名词形式，如'查询用户数据'）",
+    "triggerType": "用户触发|时钟触发|接口触发",
+    "description": "功能简要描述",
+    "moduleName": "所属模块"
+  }
+]
+
+如果用户描述中没有明确的功能需求，返回空数组 []`;
+
+    const { client, model, useGeminiSDK } = clientConfig;
+
+    let reply = '';
+
+    if (useGeminiSDK) {
+      const result = await client.generateContent(analysisPrompt);
+      const response = await result.response;
+      reply = response.text();
+    } else {
+      const completion = await client.chat.completions.create({
+        model,
+        messages: [{ role: 'user', content: analysisPrompt }],
+        temperature: 0.3,
+        max_tokens: 2000
+      });
+      reply = completion.choices[0].message.content;
+    }
+
+    console.log('AI分析结果:', reply.substring(0, 500));
+
+    // 解析JSON响应
+    let functions = [];
+    try {
+      // 尝试提取JSON数组
+      const jsonMatch = reply.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        functions = JSON.parse(jsonMatch[0]);
+      }
+    } catch (parseError) {
+      console.error('JSON解析失败:', parseError.message);
+      // 尝试从文本中提取功能名称
+      const nameMatches = reply.match(/"name"\s*:\s*"([^"]+)"/g);
+      if (nameMatches) {
+        functions = nameMatches.map((match, idx) => {
+          const name = match.match(/"name"\s*:\s*"([^"]+)"/)[1];
+          return {
+            name,
+            triggerType: '用户触发',
+            description: '',
+            moduleName: '自定义'
+          };
+        });
+      }
+    }
+
+    // 过滤掉与现有功能重复的
+    const newFunctions = functions.filter(fn =>
+      !existingFunctions.some(existing =>
+        existing.toLowerCase().includes(fn.name.toLowerCase()) ||
+        fn.name.toLowerCase().includes(existing.toLowerCase())
+      )
+    );
+
+    console.log(`识别到 ${functions.length} 个功能，去重后 ${newFunctions.length} 个`);
+
+    res.json({
+      success: true,
+      functions: newFunctions,
+      totalIdentified: functions.length,
+      message: newFunctions.length > 0
+        ? `识别到 ${newFunctions.length} 个新功能`
+        : '未识别到新功能'
+    });
+
+  } catch (error) {
+    console.error('对话式功能分析失败:', error);
+    res.status(500).json({ error: '分析失败: ' + error.message });
+  }
+});
+
 // 导出Excel
 app.post('/api/export-excel', async (req, res) => {
   try {
