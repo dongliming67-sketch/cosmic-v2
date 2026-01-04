@@ -2070,7 +2070,7 @@ async function performFinalDeduplication(tableData) {
 // 生成唯一的数据组名称
 async function generateUniqueGroupName(originalName, subProcessDesc, functionalProcess, existingNames, duplicateIndex) {
   // 从功能过程中提取动词关键词
-  const actionVerbs = ['查询', '创建', '删除', '修改', '更新', '导出', '导入', '新增', '编辑', '审批', '审核', '提交', '撤销', '启用', '禁用', '配置', '设置', '分配', '取消', '生成', '保存', '读取'];
+  const actionVerbs = ['查询', '创建', '删除', '修改', '更新', '导出', '导入', '新增', '编辑', '审批', '审核', '提交', '撤销', '启用', '禁用', '配置', '设置', '分配', '取消', '生成', '保存', '读取', '搭建', '建立', '部署', '安装', '集成', '迁移', '初始化', '启动', '停止', '注册', '绑定', '解绑'];
   let processAction = '';
   for (const verb of actionVerbs) {
     if (functionalProcess.includes(verb)) {
@@ -2110,7 +2110,7 @@ async function generateUniqueAttrString(originalAttrs, subProcessDesc, functiona
   let fieldsArray = originalAttrs.split(/[|,、，]/).map(f => f.trim()).filter(Boolean);
 
   // 从功能过程中提取动词关键词
-  const actionVerbs = ['查询', '创建', '删除', '修改', '更新', '导出', '导入', '新增', '编辑', '审批', '审核', '提交', '撤销', '启用', '禁用', '配置', '设置', '分配', '取消', '生成', '保存', '读取'];
+  const actionVerbs = ['查询', '创建', '删除', '修改', '更新', '导出', '导入', '新增', '编辑', '审批', '审核', '提交', '撤销', '启用', '禁用', '配置', '设置', '分配', '取消', '生成', '保存', '读取', '搭建', '建立', '部署', '安装', '集成', '迁移', '初始化', '启动', '停止', '注册', '绑定', '解绑'];
   let processAction = '';
   for (const verb of actionVerbs) {
     if (functionalProcess.includes(verb)) {
@@ -2183,7 +2183,7 @@ function generateSemanticSubProcessDesc(originalDesc, functionalProcess) {
   if (!originalDesc || !functionalProcess) return originalDesc;
 
   // 从功能过程中提取动词和业务对象
-  const actionVerbs = ['查询', '创建', '删除', '修改', '更新', '导出', '导入', '新增', '编辑', '审批', '审核', '提交', '撤销', '启用', '禁用', '配置', '设置', '分配', '取消', '发布', '生成', '同步', '备份', '恢复', '验证', '确认'];
+  const actionVerbs = ['查询', '创建', '删除', '修改', '更新', '导出', '导入', '新增', '编辑', '审批', '审核', '提交', '撤销', '启用', '禁用', '配置', '设置', '分配', '取消', '发布', '生成', '同步', '备份', '恢复', '验证', '确认', '搭建', '建立', '部署', '安装', '集成', '迁移', '初始化', '启动', '停止', '注册', '绑定', '解绑'];
 
   let actionVerb = '';
   let businessObject = functionalProcess;

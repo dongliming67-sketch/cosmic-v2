@@ -1761,6 +1761,31 @@ ${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能
               </div>
             </div>
 
+            {/* 需求内容卡片 - 有文档时显示 */}
+            {documentContent && (
+              <div className="bg-white border border-[#E5E3DE] rounded-xl p-5 flex-1 min-h-0 flex flex-col">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-semibold text-[#1A1915] flex items-center gap-2">
+                    <FileText className="w-4 h-4 text-[#D97757]" />
+                    需求内容
+                  </h3>
+                  <button
+                    onClick={() => setShowPreview(true)}
+                    className="text-xs text-[#D97757] hover:underline"
+                  >
+                    查看完整内容 →
+                  </button>
+                </div>
+                <div className="flex-1 overflow-y-auto bg-[#FAF9F7] rounded-lg p-3 text-xs text-[#6B6760] leading-relaxed max-h-[300px]">
+                  <pre className="whitespace-pre-wrap font-sans">
+                    {documentContent.length > 2000 
+                      ? documentContent.substring(0, 2000) + '\n\n... (点击"查看完整内容"查看更多)'
+                      : documentContent}
+                  </pre>
+                </div>
+              </div>
+            )}
+
             {/* 统计卡片 - 有数据时显示 */}
             {tableData.length > 0 && (
               <div className="bg-white border border-[#E5E3DE] rounded-xl p-5">
@@ -1908,27 +1933,31 @@ ${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能
                 </div>
               )}
 
+              {/* 等待分析提示 */}
+              {isWaitingForAnalysis && documentContent && (
+                <div className="flex justify-end">
+                  <div className="inline-flex items-center gap-3 bg-orange-50 border border-orange-100 rounded-lg p-3 animate-fade-in">
+                    <div className="flex items-center gap-2 text-orange-800 text-sm">
+                      <Info className="w-4 h-4 flex-shrink-0" />
+                      <span>输入限制条件后发送，或直接开始</span>
+                    </div>
+                    <button
+                      onClick={() => handleStartAnalysis(documentContent, inputText.trim())}
+                      disabled={isLoading}
+                      className="px-4 py-1.5 bg-[#D97757] text-white rounded-lg hover:bg-[#C4684A] shadow-sm transition-all flex items-center gap-2 text-sm font-medium whitespace-nowrap"
+                    >
+                      <Sparkles className="w-4 h-4" />
+                      开始智能拆分
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div ref={messagesEndRef} />
             </div>
 
             {/* 输入区 */}
             <div className="p-4 border-t border-[#E5E3DE]">
-              {isWaitingForAnalysis && documentContent && (
-                <div className="mb-3 flex items-center justify-between bg-orange-50 border border-orange-100 rounded-lg p-3 animate-fade-in">
-                  <div className="flex items-center gap-2 text-orange-800 text-sm">
-                    <Info className="w-4 h-4" />
-                    <span>您可以输入**限制条件**（如："拆xxx模块"）后发送，或直接开始</span>
-                  </div>
-                  <button
-                    onClick={() => handleStartAnalysis(documentContent, inputText.trim())}
-                    disabled={isLoading}
-                    className="px-4 py-1.5 bg-[#D97757] text-white rounded-lg hover:bg-[#C4684A] shadow-sm transition-all flex items-center gap-2 text-sm font-medium"
-                  >
-                    <Sparkles className="w-4 h-4" />
-                    开始智能拆分
-                  </button>
-                </div>
-              )}
               <div className="bg-[#FAF9F7] border border-[#E5E3DE] rounded-xl p-2">
                 <div className="flex gap-2">
                   <textarea
