@@ -11,6 +11,12 @@ echo ║                                                            ║
 echo ╚════════════════════════════════════════════════════════════╝
 echo.
 
+echo [0/4] 🧹 正在清理残留进程...
+powershell -Command "$ports = @(2617, 3001, 3002, 5173); foreach($port in $ports) { $p = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -gt 4 } | Select-Object -ExpandProperty OwningProcess -Unique; if($p) { foreach($id in $p) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue; echo \"已杀死占用端口 $port 的进程: $id\" } } }"
+timeout /t 1 /nobreak >nul
+echo ✅ 端口清理完成
+echo.
+
 :: 检查Node.js是否安装
 echo [1/4] 🔍 检查Node.js环境...
 where node >nul 2>nul

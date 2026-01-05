@@ -33,7 +33,7 @@ if "%HTTP_PROXY%"=="" (
 
 echo.
 echo [1/2] 正在清理残留进程...
-powershell -Command "$ports = @(3001, 5173); foreach($port in $ports) { $p = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -gt 4 } | Select-Object -ExpandProperty OwningProcess -Unique; if($p) { foreach($id in $p) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue; } } }"
+powershell -Command "$ports = @(2617, 3001, 3002, 5173); foreach($port in $ports) { $p = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -gt 4 } | Select-Object -ExpandProperty OwningProcess -Unique; if($p) { foreach($id in $p) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue; } } }"
 
 echo [2/2] 正在启动服务 (前端+后端)...
 echo.

@@ -64,7 +64,7 @@ function App() {
     }
     return 30;
   });
-  // 拆分模式: 'quantity' = 数量优先, 'quality' = 质量优先, 'three-layer' = 三层分析框架
+  // 拆分模式: 'quantity' = 数量优先, 'quality' = 质量优先, 'three-layer' = 三层分析框架, 'two-step' = 两步骤COSMIC拆分
   const [splitMode, setSplitMode] = useState('quality');
   const [understanding, setUnderstanding] = useState(null);
   const [analysisPhase, setAnalysisPhase] = useState(''); // 'understanding' | 'splitting' | 'reviewing' | ''
@@ -93,6 +93,11 @@ function App() {
   const [addFunctionInput, setAddFunctionInput] = useState(''); // 用户输入的需求描述
   const [isAnalyzingNewFunction, setIsAnalyzingNewFunction] = useState(false); // 是否正在AI分析
 
+  // 两步骤COSMIC拆分相关状态
+  const [twoStepFunctionList, setTwoStepFunctionList] = useState(''); // 第一步识别的功能过程列表
+  const [showFunctionListEditor, setShowFunctionListEditor] = useState(false); // 是否显示功能过程列表编辑器
+  const [isTwoStepProcessing, setIsTwoStepProcessing] = useState(false); // 是否正在两步骤处理中
+  const [twoStepCurrentStep, setTwoStepCurrentStep] = useState(0); // 当前步骤：0=未开始，1=功能识别中，2=等待确认，3=COSMIC拆分中
 
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -150,6 +155,8 @@ function App() {
       showToast('已切换到数量优先模式：尽可能多地识别功能过程，达到目标数量');
     } else if (mode === 'three-layer') {
       showToast('已切换到三层分析框架模式（Groq）：FP边界清晰、属性唯一、ERWX完整闭环');
+    } else if (mode === 'two-step') {
+      showToast('已切换到两步骤COSMIC拆分模式：先识别功能过程，后进行COSMIC拆分');
     }
   };
 
@@ -1339,6 +1346,8 @@ ${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能
       await startQualityAnalysis(content, guidelines);
     } else if (splitMode === 'three-layer') {
       await startThreeLayerAnalysis(content, guidelines);
+    } else if (splitMode === 'two-step') {
+      await startTwoStepExtraction();
     } else {
       await startAnalysis(content, guidelines);
     }
@@ -1466,6 +1475,105 @@ ${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能
     }
   };
 
+  // 两步骤COSMIC拆分 - 第一步：功能过程识别
+  const startTwoStepExtraction = async () => {
+    if (!documentContent) {
+      showToast('请先上传需求文档');
+      return;
+    }
+
+    setIsTwoStepProcessing(true);
+    setTwoStepCurrentStep(1);
+    setIsLoading(true);
+
+    setMessages([{
+      role: 'system',
+      content: '📋 **两步骤COSMIC拆分 - 第一步：功能过程识别**\n正在从需求文档中提取功能过程...'
+    }]);
+
+    try {
+      const res = await axios.post('/api/two-step/extract-functions', {
+        documentContent
+      });
+
+      if (res.data.success) {
+        setTwoStepFunctionList(res.data.functionProcessList);
+        setTwoStepCurrentStep(2);
+        setShowFunctionListEditor(true);
+
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          content: `## ✅ 功能过程识别完成\n\n已识别出功能过程列表，请在编辑器中查看、修改或补充，然后进行第二步COSMIC拆分。\n\n${res.data.functionProcessList.substring(0, 500)}...\n\n*（完整内容请在编辑器中查看）*`
+        }]);
+
+        showToast('功能过程识别完成，请确认后进行COSMIC拆分');
+      }
+    } catch (error) {
+      console.error('功能过程识别失败:', error);
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: `❌ 功能过程识别失败：${error.response?.data?.error || error.message}`
+      }]);
+      setTwoStepCurrentStep(0);
+      setIsTwoStepProcessing(false);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // 两步骤COSMIC拆分 - 第二步：COSMIC拆分
+  const startTwoStepCosmicSplit = async () => {
+    if (!twoStepFunctionList || !twoStepFunctionList.trim()) {
+      showToast('功能过程列表为空，请先完成第一步');
+      return;
+    }
+
+    setTwoStepCurrentStep(3);
+    setIsLoading(true);
+    setShowFunctionListEditor(false);
+
+    setMessages(prev => [...prev, {
+      role: 'system',
+      content: '🔧 **两步骤COSMIC拆分 - 第二步：COSMIC拆分**\n正在将功能过程列表拆分为COSMIC表格...'
+    }]);
+
+    try {
+      const res = await axios.post('/api/two-step/cosmic-split', {
+        functionProcessList: twoStepFunctionList
+      });
+
+      if (res.data.success) {
+        if (res.data.tableData && res.data.tableData.length > 0) {
+          setTableData(res.data.tableData);
+
+          setMessages(prev => [...prev, {
+            role: 'assistant',
+            content: `## ✅ COSMIC拆分完成\n\n共生成 **${res.data.tableData.length}** 条COSMIC记录。\n\n功能过程数量：**${[...new Set(res.data.tableData.map(r => r.functionalProcess))].length}** 个\n\n您可以点击"查看表格"按钮查看详细数据，或直接导出Excel。`
+          }]);
+
+          showToast(`COSMIC拆分完成，共${res.data.tableData.length}条记录`);
+        } else {
+          setMessages(prev => [...prev, {
+            role: 'assistant',
+            content: `## ⚠️ COSMIC拆分完成，但未生成表格数据\n\n${res.data.cosmicResult}`
+          }]);
+        }
+
+        setTwoStepCurrentStep(0);
+        setIsTwoStepProcessing(false);
+      }
+    } catch (error) {
+      console.error('COSMIC拆分失败:', error);
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: `❌ COSMIC拆分失败：${error.response?.data?.error || error.message}`
+      }]);
+      setTwoStepCurrentStep(2);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   // 导出Excel
   const exportExcel = async () => {
     if (tableData.length === 0) {
@@ -1529,8 +1637,8 @@ ${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能
               <Sparkles className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h1 className="text-lg font-semibold text-[#1A1915]">Cosmic拆分智能体</h1>
-              <p className="text-xs text-[#6B6760]">基于AI的软件功能规模度量工具</p>
+              <h1 className="text-lg font-semibold text-[#1A1915] tracking-tight">Cosmic</h1>
+              <p className="text-xs text-[#A8A49E]">功能规模智能分析</p>
             </div>
           </div>
 
@@ -1572,6 +1680,16 @@ ${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能
               >
                 <Brain className="w-4 h-4" />
                 <span>三层分析框架</span>
+              </button>
+              <button
+                onClick={() => handleSplitModeChange('two-step')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${splitMode === 'two-step'
+                  ? 'bg-white text-[#D97757] shadow-sm'
+                  : 'text-[#6B6760] hover:text-[#1A1915]'
+                  }`}
+              >
+                <BarChart3 className="w-4 h-4" />
+                <span>两步骤拆分</span>
               </button>
             </div>
 
@@ -1947,6 +2065,18 @@ ${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能
                     )}
                   </div>
                 </div>
+                {/* 两步拆分模式下显示重新编辑按钮 */}
+                {splitMode === 'two-step' && twoStepFunctionList && (
+                  <div className="mt-3 pt-3 border-t border-[#E5E3DE]">
+                    <button
+                      onClick={() => setShowFunctionListEditor(true)}
+                      className="w-full px-3 py-2 bg-amber-50 border border-amber-200 text-amber-700 text-xs rounded-lg hover:bg-amber-100 transition-colors flex items-center justify-center gap-2"
+                    >
+                      <BarChart3 className="w-3 h-3" />
+                      重新编辑功能过程列表
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1960,8 +2090,8 @@ ${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能
                   <Bot className="w-5 h-5 text-[#D97757]" />
                 </div>
                 <div>
-                  <h2 className="font-medium text-[#1A1915]">欢迎使用Cosmic拆分智能体</h2>
-                  <p className="text-xs text-[#6B6760]">上传Word文档开始分析，或直接输入功能过程描述</p>
+                  <h2 className="font-medium text-[#1A1915]">开始分析</h2>
+                  <p className="text-xs text-[#6B6760]">上传文档或直接输入内容</p>
                 </div>
               </div>
             </div>
@@ -2520,6 +2650,92 @@ ${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能
       <div className="gi-watermark">
         <div className="gi-soldier"></div>
       </div>
+
+      {/* 功能过程列表编辑器弹窗 - 两步骤COSMIC拆分 */}
+      {showFunctionListEditor && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-6xl m-4 h-[90vh] flex flex-col">
+            {/* 标题栏 */}
+            <div className="flex items-center justify-between p-6 border-b border-gray-200 flex-shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-amber-100 rounded-lg flex items-center justify-center">
+                  <BarChart3 className="w-5 h-5 text-amber-600" />
+                </div>
+                <div>
+                  <h2 className="text-xl font-semibold text-gray-800">功能过程列表编辑器</h2>
+                  <p className="text-sm text-gray-500">请确认、修改或补充功能过程，然后进行COSMIC拆分</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowFunctionListEditor(false)}
+                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+
+            {/* 编辑器内容 */}
+            <div className="flex-1 overflow-hidden p-6 flex flex-col min-h-0">
+              {/* 步骤指示 */}
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 flex-shrink-0 mb-4">
+                <div className="flex items-start gap-3">
+                  <Info className="w-5 h-5 text-blue-500 mt-0.5 flex-shrink-0" />
+                  <div className="text-sm text-blue-700">
+                    <p className="font-medium mb-1">第一步已完成：功能过程识别</p>
+                    <p>AI已从需求文档中提取功能过程。您可以在下方文本框中：</p>
+                    <ul className="list-disc list-inside mt-2 space-y-1">
+                      <li>检查识别结果是否准确</li>
+                      <li>修改功能过程描述</li>
+                      <li>添加遗漏的功能过程</li>
+                      <li>删除不需要的功能过程</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+
+              {/* 文本编辑器 */}
+              <div className="flex-1 flex flex-col min-h-0">
+                <label className="block text-sm font-medium text-gray-700 mb-2 flex-shrink-0">
+                  功能过程列表（Markdown格式）
+                </label>
+                <textarea
+                  value={twoStepFunctionList}
+                  onChange={(e) => setTwoStepFunctionList(e.target.value)}
+                  className="flex-1 w-full px-4 py-3 border border-gray-300 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent resize-none bg-gray-50 overflow-y-auto"
+                  placeholder="功能过程列表将显示在这里..."
+                  style={{ minHeight: '300px' }}
+                />
+                <p className="mt-2 text-xs text-gray-500 flex-shrink-0">
+                  💡 提示：保持Markdown格式（使用 # 和 ##），每个功能过程应包含功能用户、触发事件、功能过程和子过程描述
+                </p>
+              </div>
+            </div>
+
+            {/* 底部按钮 */}
+            <div className="flex items-center justify-between p-6 border-t border-gray-200 bg-gray-50 flex-shrink-0">
+              <button
+                onClick={() => setShowFunctionListEditor(false)}
+                className="px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-200 rounded-lg transition-colors"
+              >
+                取消
+              </button>
+              <div className="flex items-center gap-3">
+                <div className="text-sm text-gray-500">
+                  字符数: {twoStepFunctionList.length}
+                </div>
+                <button
+                  onClick={startTwoStepCosmicSplit}
+                  disabled={!twoStepFunctionList.trim() || isLoading}
+                  className="flex items-center gap-2 px-6 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-medium"
+                >
+                  <Zap className="w-4 h-4" />
+                  <span>开始COSMIC拆分</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

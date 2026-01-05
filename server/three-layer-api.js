@@ -288,14 +288,21 @@ ${triggerStats}
 **业务全景观测（数据生命周期）：**
 1. **感知层**：识别所有外部交互（文件推送、工单流入、用户指令）。
 2. **治理层**：识别数据形态转化（原始入库、多维汇总、分析建模）。
-3. **认知层**：**核心拆分点**。按“厂家+业务”矩阵平铺（如：华为视频质差、中兴交互查询）。
+3. **认知层**：**核心拆分点**。严禁合并，按“厂家+业务+指标”三维矩阵平铺（如：华为视频质差、中兴交互查询、日颗粒度汇总）。
 4. **分发层**：识别所有输出交付（UI渲染、文件导出、消息推送）。
 
 **三层分析框架 -> 优化执行指令：**
 
-1. **第一层：物理边界锚定** - 准确识别触发物理动作的交互者及其触发事件。
+1. **第一层：物理边界锚定** - 准确识别触发物理动作的功能用户（发起者与接收者）及其触发事件。
 2. **第二层：物理目标挂载** - 100%采用文档定义的具体字段，禁止使用通用属性属性。
 3. **第三层：ERWX物理闭环** - 强制满足 E(物理输入)+R(规则检索)+W(结论落地)+X(价值交付) 四个环节。
+
+## 触发事件与功能用户映射表（严格遵照执行）：
+|触发事件|功能用户赋值规则|说明|
+|:---|:---|:---|
+|用户触发|发起者：用户 接收者：用户|页面按钮点击跳转等|
+|时钟触发|发起者：定时触发器 接收者：网优平台|自动汇总、短信、我方调他方|
+|接口调用触发|发起者：其他平台 接收者：网优平台|他方调用我方接口|
 `;
     }
 
@@ -314,8 +321,8 @@ ${understandingContext}
 
 ## 三层分析框架 -> 深度优化原则
 
-### 1. 宏观：“厂家+业务”全平铺拆解（膨胀核心）
-**严禁合并！** 即使逻辑相似，只要涉及厂家不同（华为/中兴）或业务类型不同（视频/游戏/支付），必须作为**独立FP**拆分。物理表、算法规则和数据域的独立性决定了它们是不同的功能点。
+### 1. 宏观：“厂家+业务+指标”全平铺拆解（膨胀核心）
+**严禁合并！** 即使逻辑相似，只要涉及厂家不同（华为/中兴）、业务类型不同（视频/游戏/支付）或指标粒度不同（日/周/月），必须作为**独立FP**拆分。物理表、算法规则和数据域的独立性决定了它们是不同的功能点。
 
 ### 2. 微观：ERWX 物理建模
 对于每个 FP，你必须手动“补齐”物理闭环：
@@ -333,13 +340,21 @@ ${understandingContext}
 - 严禁空泛词。必须使用：华为小区ID、视频时延要求、中兴质差判定准则、告警推送标识。
 - 不同 FP 的数据属性重合度必须 **< 30%**。
 
+### 5. 功能界面说明识别（极重要！）
+- **严禁遗漏 UI 描述中的子功能**。如果文档说"支持查询、导出"，必须拆分为独立的 **[查询]** 和 **[导出]** 两个功能过程。
+- 不要因为它们写在同一个标题下就合并处理。
+
 ## 输出格式：
 |功能用户|触发事件|功能过程|子过程描述|数据移动类型|数据组|数据属性|
 |:---|:---|:---|:---|:---|:---|:---|
-|用户触发|用户请求|[厂商品牌][业务对象][核心动作]|接收[场景化]请求数据包|E|[业务对象]请求集|字段1、字段2、字段3|
+|发起者：用户 接收者：用户|用户触发|[厂商品牌][业务对象][核心动作]|接收[场景化]请求数据包|E|[业务对象]请求集|字段1、字段2、字段3|
 ||||检索[业务规则]判定依据|R|[业务对象]判定门限表|字段1、字段2、字段3|
 ||||记录[业务结论]处理流水|W|[业务对象]分析结论表|字段1、字段2、字段3|
 ||||返回[可视化]执行回执|X|[业务对象]响应结果|返回码、可视化图表、判定文本|
+|发起者：定时触发器 接收者：网优平台|时钟触发|[厂商品牌][业务对象]定时汇总|接收[定时任务]脉冲指令|E|定时任务状态包|任务标识、当前时间、执行周期|
+||||读取[汇总规则]计算门限|R|[业务对象]指标规则表|指标门限、计算公式、关联厂家|
+||||记录[汇总结果]分析流水|W|[业务对象]结果汇总表|厂家标识、统计日期、汇总值|
+||||返回[执行回执]状态通知|X|任务执行响应包|执行结果、返回码、消息体|
 `;
     } else {
       // 后续轮次：检查遗漏功能（简化版，不使用硬编码规则）
@@ -907,45 +922,27 @@ async function extractFunctionList(req, res) {
     // 判断是否需要分块处理
     const needChunking = enableChunking && documentContent.length > 8000;
 
-    // ═══════════════════════════════════════════════════════════
-    // 🔧 第0步：规则引擎预扫描（在AI分析之前执行）
-    // 用正则表达式提取文档中所有可能的功能点，作为兜底
-    // ═══════════════════════════════════════════════════════════
-    console.log('\n🔍 步骤0：规则引擎预扫描文档...');
-    const preScannedFunctions = ruleBasedFunctionExtraction(documentContent);
-    console.log(`📋 规则引擎预扫描发现 ${preScannedFunctions.length} 个潜在功能点`);
-    if (preScannedFunctions.length > 0) {
-      console.log('预扫描功能列表:');
-      preScannedFunctions.forEach((fn, i) => {
-        console.log(`  ${i + 1}. [${fn.type}] ${fn.name}${fn.autoDetected ? ' (自动检测)' : ''}`);
-      });
-    }
-
     if (needChunking) {
       // 大文档分块处理
-      console.log('\n📄 检测到大文档，启动分块处理模式...');
-      let functionList = await extractFromLargeDocument(
+      console.log('📄 检测到大文档，启动分块处理模式...');
+      const functionList = await extractFromLargeDocument(
         documentContent,
         clientConfig,
         maxIterations,
         userGuidelines  // 传递用户限制条件到分块处理
       );
 
-      // 合并预扫描结果
-      functionList = mergePreScannedFunctions(functionList, preScannedFunctions);
-
       return res.json({
         success: true,
         functionList,
         provider,
         mode: 'chunked',
-        totalChunks: functionList._metadata?.totalChunks || 0,
-        preScannedCount: preScannedFunctions.length
+        totalChunks: functionList._metadata?.totalChunks || 0
       });
     }
 
     // 小文档直接处理（保持原有逻辑）
-    console.log('\n📄 文档大小适中，使用标准处理模式...');
+    console.log('📄 文档大小适中，使用标准处理模式...');
 
     // 功能清单提取专用提示词 - 极致细粒度拆分版本
     const extractionPrompt = `你是一个COSMIC功能点分析专家。你的任务是按照**最细粒度**拆分出文档中的所有功能。
@@ -2134,13 +2131,21 @@ ${documentContent}
       console.log('\n🔍 检测并修正泛化功能名称...');
       functionList = validateAndFixFunctionNames(functionList);
 
-      // 🔧🔧🔧 合并规则引擎预扫描结果（关键步骤！）
-      console.log('\n🔍 合并规则引擎预扫描结果...');
-      functionList = mergePreScannedFunctions(functionList, preScannedFunctions);
-
       // 🔧🔧🔧 自动补充缺失的查询和导出功能
       console.log('\n🔍 自动检测并补充缺失的查询/导出功能...');
       functionList = autoAddMissingQueryExportFunctions(functionList, documentContent);
+
+      // 🚨 自动过滤掉不合格的泛化功能
+      console.log('\n🚨 自动过滤泛化功能...');
+      const beforeFilterCount = functionList.totalFunctions;
+      functionList = autoFilterGenericFunctions(functionList);
+      const afterFilterCount = functionList.totalFunctions;
+
+      if (beforeFilterCount > afterFilterCount) {
+        console.log(`✅ 已自动过滤 ${beforeFilterCount - afterFilterCount} 个泛化功能`);
+      } else {
+        console.log(`✅ 所有功能均符合要求，无需过滤`);
+      }
 
       // 检查质量
       const qualityIssues = checkFunctionListQuality(functionList);
@@ -2157,8 +2162,7 @@ ${documentContent}
       rawResponse: finalReply,
       provider,
       mode: 'standard',
-      parseDetails: !functionList ? parseDetails : undefined,
-      preScannedCount: preScannedFunctions.length
+      parseDetails: !functionList ? parseDetails : undefined
     });
   } catch (error) {
     console.error('功能清单提取失败:', error);
@@ -2808,6 +2812,7 @@ function validateAndFixFunctionNames(functionList) {
 
 /**
  * 检查功能列表质量，如果泛化过多则拒绝
+ * 使用通用规则检测泛化功能，而不是硬编码特定名称
  */
 function checkFunctionListQuality(functionList) {
   const issues = [];
@@ -2817,33 +2822,272 @@ function checkFunctionListQuality(functionList) {
     issues.push(`功能数量过少（${functionList.totalFunctions}个），可能识别不完整`);
   }
 
-  // 检查泛化词汇
-  const forbiddenWords = ['画像', '可视化', '交互', '数据业务'];
+  // 🎯 具体业务动作关键词（必须包含至少一个）
+  const actionKeywords = [
+    '查询', '导出', '导入', '添加', '删除', '修改', '更新', '创建', '编辑',
+    '计算', '统计', '汇总', '分析', '评估', '判定', '检测', '识别',
+    '推送', '发送', '接收', '上报', '同步', '告警', '通知',
+    '搭建', '部署', '配置', '集成', '迁移', '初始化', '启动', '停止'
+  ];
+
+  // 🚫 抽象泛化词汇（单独使用或结尾时视为泛化）
+  const genericWords = [
+    '画像', '可视化', '交互', '展示', '查看', '显示', '呈现',
+    '管理', '处理', '操作', '功能', '模块', '系统', '平台',
+    '数据', '信息', '内容', '业务', '服务'
+  ];
+
+  // 🚫 纯UI渲染词汇（这些不是COSMIC功能过程）
+  const uiRenderingWords = [
+    '图展示', '图查看', '图表展示', '图表查看',
+    '可视化展示', '可视化呈现',
+    '页面展示', '界面展示', '首页展示'
+  ];
+
+  // 🚫 功能说明文字特征（这些是描述而非功能名称）
+  const descriptionPatterns = [
+    /触发.*响应/, /触发.*情况/, /支持.*功能/,
+    /用户触发/, /时钟触发/, /接口触发/,
+    /.*的情况$/
+  ];
 
   for (const module of functionList.modules) {
     if (!module.functions) continue;
 
     for (const func of module.functions) {
-      // 检查是否包含禁止词汇（单独使用）
-      for (const word of forbiddenWords) {
-        if (func.name === word) {
-          issues.push(`功能 "${func.name}" 过于泛化，必须明确具体内容`);
+      const funcName = func.name || '';
+
+      // ====== 检查1：功能名称长度 ======
+      if (funcName.length < 4) {
+        issues.push(`❌ 功能 "${funcName}" 名称过短（小于4字），缺乏具体业务描述`);
+        continue;
+      }
+
+      // ====== 检查2：是否是功能说明文字而非功能名称 ======
+      for (const pattern of descriptionPatterns) {
+        if (pattern.test(funcName)) {
+          issues.push(`❌ 功能 "${funcName}" 看起来是功能说明文字，而非具体功能名称`);
+          break;
         }
       }
 
-      // 检查功能名称长度（过短通常意味着泛化）
-      if (func.name.length < 4) {
-        issues.push(`功能 "${func.name}" 名称过短，可能不够具体`);
+      // ====== 检查3：是否是纯UI渲染（不是COSMIC功能过程） ======
+      for (const uiWord of uiRenderingWords) {
+        if (funcName.includes(uiWord)) {
+          issues.push(`❌ 功能 "${funcName}" 包含"${uiWord}"，这是前端UI渲染，不属于COSMIC功能过程。应改为数据查询或导出功能`);
+          break;
+        }
       }
 
-      // 检查是否只包含"数据"而不明确对象
-      if (func.name.includes('数据') && !func.name.match(/(用户数|流量|小区|基站|告警|配置)/)) {
-        issues.push(`功能 "${func.name}" 包含"数据"但未明确具体对象`);
+      // ====== 检查4：必须包含具体业务动作 ======
+      const hasActionKeyword = actionKeywords.some(keyword => funcName.includes(keyword));
+      if (!hasActionKeyword) {
+        // 允许定时任务和汇总类功能不强制包含动作词
+        if (!funcName.includes('定时') && !funcName.includes('汇总') && !func.triggerType?.includes('时钟')) {
+          issues.push(`⚠️ 功能 "${funcName}" 缺少明确的业务动作关键词（如：查询、导出、统计、计算等）`);
+        }
+      }
+
+      // ====== 检查5：不能只有抽象词汇，必须包含具体业务对象 ======
+      // 检查功能名是否主要由泛化词汇组成
+      let hasConcreteContent = false;
+
+      // 移除所有泛化词汇后，看是否还有实质内容
+      let nameWithoutGeneric = funcName;
+      for (const word of genericWords) {
+        nameWithoutGeneric = nameWithoutGeneric.replace(new RegExp(word, 'g'), '');
+      }
+      for (const action of actionKeywords) {
+        nameWithoutGeneric = nameWithoutGeneric.replace(new RegExp(action, 'g'), '');
+      }
+
+      // 如果移除泛化词和动作词后，剩余内容少于2个字，说明缺乏具体业务对象
+      if (nameWithoutGeneric.trim().length < 2) {
+        issues.push(`❌ 功能 "${funcName}" 过于泛化，缺少具体的业务对象名称（如：用户数、小区评估、健康度指标等）`);
+        hasConcreteContent = false;
+      } else {
+        hasConcreteContent = true;
+      }
+
+      // ====== 检查6：以抽象词结尾的功能（通常是泛化的） ======
+      if (hasConcreteContent) {
+        for (const word of genericWords) {
+          if (funcName.endsWith(word) && funcName.length === word.length) {
+            issues.push(`❌ 功能 "${funcName}" 单独使用抽象词汇"${word}"，必须明确具体内容`);
+            break;
+          }
+          // 检查是否只是在泛化词前加了一个修饰词（如"用户画像"、"小区画像"）
+          if (funcName.endsWith(word) && funcName.length <= word.length + 4) {
+            // 检查是否包含具体的业务指标
+            const hasSpecificIndicator = /特征|属性|行为|标签|负荷|流量|用户数|业务类型|健康度|质差|评估|分析|统计/.test(funcName);
+            if (!hasSpecificIndicator) {
+              issues.push(`⚠️ 功能 "${funcName}" 以"${word}"结尾但缺少具体业务指标，建议细化为具体功能`);
+            }
+          }
+        }
+      }
+
+      // ====== 检查7：包含"数据"但未明确具体数据对象 ======
+      if (funcName.includes('数据')) {
+        const hasSpecificDataObject = /用户数|流量|小区|基站|告警|配置|指标|评估|健康度|质差|任务|订单|设备|工单/.test(funcName);
+        if (!hasSpecificDataObject) {
+          issues.push(`❌ 功能 "${funcName}" 包含"数据"但未明确具体数据对象（如：用户数数据、小区流量数据、健康度指标数据等）`);
+        }
       }
     }
   }
 
   return issues;
+}
+
+/**
+ * 自动过滤掉泛化的不合格功能
+ * @param {Object} functionList - 功能清单
+ * @returns {Object} 过滤后的功能清单
+ */
+function autoFilterGenericFunctions(functionList) {
+  if (!functionList || !functionList.modules) return functionList;
+
+  // 业务动作关键词
+  const actionKeywords = [
+    '查询', '导出', '导入', '添加', '删除', '修改', '更新', '创建', '编辑',
+    '计算', '统计', '汇总', '分析', '评估', '判定', '检测', '识别',
+    '推送', '发送', '接收', '上报', '同步', '告警', '通知',
+    '搭建', '部署', '配置', '集成', '迁移', '初始化', '启动', '停止'
+  ];
+
+  // 抽象泛化词汇
+  const genericWords = [
+    '画像', '可视化', '交互', '展示', '查看', '显示', '呈现',
+    '管理', '处理', '操作', '功能', '模块', '系统', '平台',
+    '数据', '信息', '内容', '业务', '服务'
+  ];
+
+  // 纯UI渲染词汇
+  const uiRenderingWords = [
+    '图展示', '图查看', '图表展示', '图表查看',
+    '可视化展示', '可视化呈现',
+    '页面展示', '界面展示', '首页展示'
+  ];
+
+  // 功能说明文字特征
+  const descriptionPatterns = [
+    /触发.*响应/, /触发.*情况/, /支持.*功能/,
+    /用户触发/, /时钟触发/, /接口触发/,
+    /.*的情况$/
+  ];
+
+  const filteredModules = [];
+  let totalFiltered = 0;
+
+  for (const module of functionList.modules) {
+    if (!module.functions) {
+      filteredModules.push(module);
+      continue;
+    }
+
+    const filteredFunctions = [];
+
+    for (const func of module.functions) {
+      const funcName = func.name || '';
+      let shouldFilter = false;
+      let filterReason = '';
+
+      // 检查1：功能名称过短
+      if (funcName.length < 4) {
+        shouldFilter = true;
+        filterReason = `名称过短（${funcName.length}字）`;
+      }
+
+      // 检查2：是否是功能说明文字
+      if (!shouldFilter) {
+        for (const pattern of descriptionPatterns) {
+          if (pattern.test(funcName)) {
+            shouldFilter = true;
+            filterReason = '功能说明文字';
+            break;
+          }
+        }
+      }
+
+      // 检查3：是否包含纯UI渲染词汇
+      if (!shouldFilter) {
+        for (const uiWord of uiRenderingWords) {
+          if (funcName.includes(uiWord)) {
+            shouldFilter = true;
+            filterReason = `包含UI渲染词汇"${uiWord}"`;
+            break;
+          }
+        }
+      }
+
+      // 检查4：移除泛化词和动作词后，是否还有实质内容
+      if (!shouldFilter) {
+        let nameWithoutGeneric = funcName;
+        for (const word of genericWords) {
+          nameWithoutGeneric = nameWithoutGeneric.replace(new RegExp(word, 'g'), '');
+        }
+        for (const action of actionKeywords) {
+          nameWithoutGeneric = nameWithoutGeneric.replace(new RegExp(action, 'g'), '');
+        }
+
+        if (nameWithoutGeneric.trim().length < 2) {
+          shouldFilter = true;
+          filterReason = '缺少具体业务对象';
+        }
+      }
+
+      // 检查5：以泛化词结尾且没有具体指标
+      if (!shouldFilter) {
+        for (const word of genericWords) {
+          if (funcName.endsWith(word) && funcName.length <= word.length + 4) {
+            const hasSpecificIndicator = /特征|属性|行为|标签|负荷|流量|用户数|业务类型|健康度|质差|评估|分析|统计|计算/.test(funcName);
+            if (!hasSpecificIndicator) {
+              shouldFilter = true;
+              filterReason = `以"${word}"结尾但缺少具体指标`;
+              break;
+            }
+          }
+        }
+      }
+
+      // 检查6：包含"数据"但未明确具体对象
+      if (!shouldFilter && funcName.includes('数据')) {
+        const hasSpecificDataObject = /用户数|流量|小区|基站|告警|配置|指标|评估|健康度|质差|任务|订单|设备|工单/.test(funcName);
+        if (!hasSpecificDataObject) {
+          shouldFilter = true;
+          filterReason = '包含"数据"但未明确具体对象';
+        }
+      }
+
+      // 决定是否保留
+      if (shouldFilter) {
+        console.log(`  🗑️  过滤: "${funcName}" - 原因: ${filterReason}`);
+        totalFiltered++;
+      } else {
+        filteredFunctions.push(func);
+      }
+    }
+
+    // 只保留有功能的模块
+    if (filteredFunctions.length > 0) {
+      filteredModules.push({
+        ...module,
+        functions: filteredFunctions
+      });
+    }
+  }
+
+  // 重新计算总功能数
+  const newTotalFunctions = filteredModules.reduce((sum, m) => sum + (m.functions ? m.functions.length : 0), 0);
+
+  console.log(`\n📊 过滤统计: 原${functionList.totalFunctions}个 → 现${newTotalFunctions}个，已过滤${totalFiltered}个泛化功能`);
+
+  return {
+    ...functionList,
+    modules: filteredModules,
+    totalFunctions: newTotalFunctions
+  };
 }
 
 // 从纯文本中提取功能列表的辅助函数
@@ -3286,417 +3530,6 @@ ${documentContent.substring(0, 5000)}${documentContent.length > 5000 ? '\n...(�
   }
 }
 
-// 🔧 规则引擎预扫描功能提取（核心兜底机制）
-// ═══════════════════════════════════════════════════════════
-
-/**
- * 规则引擎预扫描 - 从文档中自动提取所有可能的功能点
- * 基于COSMIC方法论，确保识别所有操作类型的功能过程
- * 关键操作类型：查询(查看)、导出(下载)、新增(创建)、修改(配置、编辑)、删除、模版下载、导入(上传)
- * @param {string} documentContent - 文档内容
- * @returns {Array} 提取到的功能点列表
- */
-function ruleBasedFunctionExtraction(documentContent) {
-  const functions = [];
-  const seenNames = new Set();
-
-  // 辅助函数：添加功能（避免重复）
-  const addFunction = (name, type, triggerType = '用户触发', description = '', source = 'rule-engine') => {
-    const cleanName = name.replace(/^\d+[\.\s、]+/, '').replace(/[""'']/g, '').trim();
-    if (cleanName.length < 3 || cleanName.length > 60) return false;
-
-    // 去重检查：精确匹配和核心词匹配
-    const nameLower = cleanName.toLowerCase();
-    const coreWords = cleanName.replace(/数据|功能|信息|结果|列表|详情/g, '').toLowerCase();
-
-    if (seenNames.has(nameLower)) return false;
-    if (coreWords.length > 3 && seenNames.has(coreWords)) return false;
-
-    seenNames.add(nameLower);
-    if (coreWords.length > 3) seenNames.add(coreWords);
-
-    functions.push({
-      name: cleanName,
-      type,
-      triggerType,
-      description: description || cleanName,
-      source,
-      autoDetected: true
-    });
-    return true;
-  };
-
-  console.log('\n📋 规则引擎预扫描开始...');
-
-  // ═══════════════════════════════════════════════════════════
-  // 第一步：提取所有表名/页面名/模块名（作为上下文）
-  // ═══════════════════════════════════════════════════════════
-
-  const contextNames = [];
-  const contextPatterns = [
-    // 匹配章节标题中的表名/页面名
-    /(?:^|\n)\s*\d+[\.\d]*[\.\s]+([^\n]{3,50}?(?:表|页面|界面|模块|功能|统计|评估|详情|汇总|分析|综合|管理|配置|监控)(?:-[日周月5分钟小时](?:数据)?)?)\s*(?:\n|$)/gi,
-    // 匹配独立的表名
-    /([^\n，。\s]{3,40}?(?:表|页面|界面|统计表|评估表|详情表|汇总表|分析表|管理表|配置表)(?:-[日周月](?:数据)?)?)/g,
-  ];
-
-  contextPatterns.forEach(pattern => {
-    let match;
-    while ((match = pattern.exec(documentContent)) !== null) {
-      const name = match[1].replace(/^\d+[\.\s]+/, '').replace(/功能界面说明|功能页面说明|功能说明/g, '').trim();
-      if (name.length >= 3 && name.length <= 50 && !contextNames.includes(name)) {
-        contextNames.push(name);
-      }
-    }
-  });
-
-  console.log(`  发现 ${contextNames.length} 个表名/页面名上下文`);
-
-  // ═══════════════════════════════════════════════════════════
-  // 第二步：识别"功能界面说明"/"功能页面说明"中的功能（最重要！）
-  // 根据COSMIC规则：查询、导出、导入、新增、修改、删除都是独立功能过程
-  // ═══════════════════════════════════════════════════════════
-
-  // 定义所有操作类型及其关键词
-  const operationTypes = [
-    // 查询类
-    { keywords: ['支持查询', '查询功能', '条件查询', '数据查询', '支持查看', '查看功能'], action: '查询', type: '查询' },
-    // 导出类
-    { keywords: ['支持导出', '导出功能', 'Excel导出', '数据导出', '支持下载', '下载功能'], action: '导出', type: '导出' },
-    // 导入类
-    { keywords: ['支持导入', '导入功能', '批量导入', '数据导入', '支持上传', '上传功能', '文件上传'], action: '导入', type: '导入' },
-    // 新增类
-    { keywords: ['支持新增', '新增功能', '支持创建', '创建功能', '支持添加', '添加功能'], action: '新增', type: '新增' },
-    // 修改类
-    { keywords: ['支持修改', '修改功能', '支持编辑', '编辑功能', '支持配置', '配置功能', '支持更新'], action: '修改', type: '修改' },
-    // 删除类
-    { keywords: ['支持删除', '删除功能', '支持移除', '批量删除'], action: '删除', type: '删除' },
-    // 模板下载类
-    { keywords: ['模板下载', '下载模板', '模版下载', '下载模版'], action: '下载模板', type: '模板' },
-  ];
-
-  // 扫描每种操作类型
-  operationTypes.forEach(op => {
-    op.keywords.forEach(keyword => {
-      let searchPos = 0;
-      while (true) {
-        const pos = documentContent.indexOf(keyword, searchPos);
-        if (pos === -1) break;
-        searchPos = pos + 1;
-
-        // 找到这个关键词之前最近的表名/页面名
-        let nearestContext = '';
-        let minDistance = Infinity;
-
-        for (const contextName of contextNames) {
-          const contextPos = documentContent.lastIndexOf(contextName, pos);
-          if (contextPos !== -1) {
-            const distance = pos - contextPos;
-            if (distance < minDistance && distance < 3000) {
-              minDistance = distance;
-              nearestContext = contextName;
-            }
-          }
-        }
-
-        if (nearestContext) {
-          // 生成功能名称：动词 + 表名/页面名 + 数据
-          const funcName = `${op.action}${nearestContext}数据`;
-          if (addFunction(funcName, op.type, '用户触发', `${op.action}${nearestContext}的数据`, 'ui-pattern')) {
-            console.log(`  ✅ [UI功能] ${funcName}`);
-          }
-        }
-      }
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════
-  // 第三步：识别"点击XXX跳转"类功能
-  // ═══════════════════════════════════════════════════════════
-
-  const jumpPatterns = [
-    /点击([^\n，。]{2,20})[，,]?\s*跳转/gi,
-    /跳转至([^\n，。]{3,30})/gi,
-    /跳转到([^\n，。]{3,30})/gi,
-    /双击([^\n，。]{2,15})进入/gi,
-  ];
-
-  jumpPatterns.forEach(pattern => {
-    let match;
-    while ((match = pattern.exec(documentContent)) !== null) {
-      const target = match[1].replace(/^[，。、\s]+|[，。、\s]+$/g, '').trim();
-      if (target.length >= 2 && target.length <= 25) {
-        const funcName = `查看${target}详情`;
-        if (addFunction(funcName, '查看', '用户触发', `查看${target}的详细信息`, 'jump-pattern')) {
-          console.log(`  ✅ [跳转功能] ${funcName}`);
-        }
-      }
-    }
-  });
-
-  // ═══════════════════════════════════════════════════════════
-  // 第四步：识别数据生成/处理类功能
-  // ═══════════════════════════════════════════════════════════
-
-  const processPatterns = [
-    { regex: /生成([^\n，。]{3,50}(?:表|数据|报表|结果))/gi, action: '生成', type: '生成' },
-    { regex: /统计([^\n，。]{3,40}(?:情况|数据|信息|指标))/gi, action: '统计', type: '统计' },
-    { regex: /汇总([^\n，。]{3,40}(?:数据|信息|指标|结果))/gi, action: '汇总', type: '汇总' },
-    { regex: /计算([^\n，。]{3,40}(?:得分|评估|指标|结果))/gi, action: '计算', type: '计算' },
-    { regex: /整合([^\n，。]{3,40}(?:数据|信息))/gi, action: '整合', type: '整合' },
-    { regex: /分析([^\n，。]{3,40}(?:数据|情况|结果|报告))/gi, action: '分析', type: '分析' },
-    { regex: /评估([^\n，。]{3,40}(?:数据|情况|结果|得分))/gi, action: '评估', type: '评估' },
-  ];
-
-  processPatterns.forEach(p => {
-    let match;
-    while ((match = p.regex.exec(documentContent)) !== null) {
-      const target = match[1].trim();
-      const funcName = `${p.action}${target}`;
-      if (addFunction(funcName, p.type, '用户触发', funcName, 'process-pattern')) {
-        console.log(`  ✅ [处理功能] ${funcName}`);
-      }
-    }
-  });
-
-  // ═══════════════════════════════════════════════════════════
-  // 第五步：识别定时任务（时钟触发）
-  // ═══════════════════════════════════════════════════════════
-
-  const timerPatterns = [
-    /每(\d+)?分钟([^\n，。]{5,30})/gi,
-    /每(小时|日|天|周|月)([^\n，。]{5,30})/gi,
-    /定时([^\n，。]{5,40})/gi,
-    /([^\n，。]{3,25})(5分钟|小时|日|周|月)汇总/gi,
-    /定期([^\n，。]{5,30})/gi,
-    /自动([^\n，。]{5,30}(?:汇总|统计|生成|推送|同步))/gi,
-  ];
-
-  timerPatterns.forEach(pattern => {
-    let match;
-    while ((match = pattern.regex ? pattern.regex.exec(documentContent) : pattern.exec(documentContent)) !== null) {
-      const taskDesc = match[0].replace(/^[，。\s]+|[，。\s]+$/g, '').trim();
-      if (taskDesc.length >= 5 && taskDesc.length <= 50) {
-        // 定时任务以"定时"开头
-        const funcName = taskDesc.startsWith('定时') ? taskDesc : `定时${taskDesc}`;
-        if (addFunction(funcName, '定时任务', '时钟触发', taskDesc, 'timer-pattern')) {
-          console.log(`  ✅ [定时任务] ${funcName}`);
-        }
-      }
-    }
-  });
-
-  // ═══════════════════════════════════════════════════════════
-  // 第六步：识别"基于XXX数据"的读取功能（多数据源拆分）
-  // ═══════════════════════════════════════════════════════════
-
-  const dataSourcePattern = /基于([^\n]{5,200}?)(?:[，,。]|生成|调用|进行)/gi;
-  let dsMatch;
-  while ((dsMatch = dataSourcePattern.exec(documentContent)) !== null) {
-    const dataSourcesStr = dsMatch[1];
-    // 分割多个数据源
-    const dataSources = dataSourcesStr.split(/[、和与,，]/g);
-    dataSources.forEach(ds => {
-      const cleanDs = ds.replace(/^\s+|\s+$/g, '').replace(/数据$/g, '').trim();
-      if (cleanDs.length >= 4 && cleanDs.length <= 50) {
-        const funcName = `读取${cleanDs}数据`;
-        if (addFunction(funcName, '读取', '用户触发', funcName, 'datasource-pattern')) {
-          console.log(`  ✅ [数据源] ${funcName}`);
-        }
-      }
-    });
-  }
-
-  // ═══════════════════════════════════════════════════════════
-  // 第七步：识别接口调用触发的功能（同步类）
-  // ═══════════════════════════════════════════════════════════
-
-  const interfacePatterns = [
-    /接口[^\n，。]{0,10}同步([^\n，。]{3,30}数据)/gi,
-    /同步([^\n，。]{3,30}数据)/gi,
-    /推送([^\n，。]{3,30}(?:数据|消息|通知))/gi,
-    /接收([^\n，。]{3,30}(?:数据|文件|消息))/gi,
-  ];
-
-  interfacePatterns.forEach(pattern => {
-    let match;
-    while ((match = pattern.exec(documentContent)) !== null) {
-      const target = match[1].trim();
-      const funcName = `同步${target}`;
-      if (addFunction(funcName, '接口同步', '接口调用触发', funcName, 'interface-pattern')) {
-        console.log(`  ✅ [接口功能] ${funcName}`);
-      }
-    }
-  });
-
-  // ═══════════════════════════════════════════════════════════
-  // 第八步：识别管理类功能（需拆分为增删改查导）
-  // ═══════════════════════════════════════════════════════════
-
-  const managementPattern = /([^\n，。\s]{2,20})管理(?:功能)?/gi;
-  let mgmtMatch;
-  while ((mgmtMatch = managementPattern.exec(documentContent)) !== null) {
-    const entity = mgmtMatch[1].trim();
-    if (entity.length >= 2 && entity.length <= 20) {
-      // 管理类功能需拆分为多个独立功能
-      ['查询', '新增', '修改', '删除', '导出'].forEach(action => {
-        const funcName = `${action}${entity}`;
-        addFunction(funcName, action, '用户触发', `${action}${entity}数据`, 'management-pattern');
-      });
-      console.log(`  ✅ [管理功能] ${entity}管理 → 拆分为5个功能`);
-    }
-  }
-
-  // ═══════════════════════════════════════════════════════════
-  // 第九步：识别章节标题对应的功能
-  // ═══════════════════════════════════════════════════════════
-
-  contextNames.forEach(contextName => {
-    // 为每个表/页面生成标准的查询和导出功能（如果还没有）
-    const queryName = `查询${contextName}数据`;
-    const exportName = `导出${contextName}数据`;
-
-    // 检查文档中是否提到了这个表的查询或导出
-    const hasQueryMention = documentContent.includes(`${contextName}`) &&
-      (documentContent.includes('查询') || documentContent.includes('查看'));
-    const hasExportMention = documentContent.includes(`${contextName}`) &&
-      (documentContent.includes('导出') || documentContent.includes('下载'));
-
-    if (hasQueryMention) {
-      addFunction(queryName, '查询', '用户触发', queryName, 'context-infer');
-    }
-    if (hasExportMention) {
-      addFunction(exportName, '导出', '用户触发', exportName, 'context-infer');
-    }
-  });
-
-  console.log(`\n📊 规则引擎预扫描完成，共发现 ${functions.length} 个潜在功能点\n`);
-  return functions;
-}
-
-
-/**
- * 合并预扫描结果到功能清单
- * @param {Object} functionList - AI识别的功能清单
- * @param {Array} preScannedFunctions - 预扫描提取的功能列表
- * @returns {Object} 合并后的功能清单
- */
-function mergePreScannedFunctions(functionList, preScannedFunctions) {
-  if (!preScannedFunctions || preScannedFunctions.length === 0) {
-    return functionList;
-  }
-
-  // 如果functionList为空，创建一个基本结构
-  if (!functionList) {
-    functionList = {
-      projectName: '自动识别',
-      projectDescription: '通过规则引擎识别的功能',
-      totalFunctions: 0,
-      modules: []
-    };
-  }
-
-  // 提取所有现有功能名称（用于去重）
-  const existingFunctionNames = new Set();
-  if (functionList.modules) {
-    functionList.modules.forEach(module => {
-      if (module.functions) {
-        module.functions.forEach(fn => {
-          existingFunctionNames.add(fn.name.toLowerCase());
-          // 同时添加简化版名称用于模糊匹配
-          const simplified = fn.name.replace(/[数据表功能]/g, '').toLowerCase();
-          existingFunctionNames.add(simplified);
-        });
-      }
-    });
-  }
-
-  // 筛选出AI没有识别到的功能
-  const missingFunctions = preScannedFunctions.filter(fn => {
-    const nameLower = fn.name.toLowerCase();
-    const simplified = fn.name.replace(/[数据表功能]/g, '').toLowerCase();
-
-    // 精确匹配
-    if (existingFunctionNames.has(nameLower)) return false;
-
-    // 模糊匹配：检查是否有包含关系
-    for (const existing of existingFunctionNames) {
-      if (existing.includes(simplified) || simplified.includes(existing)) {
-        return false;
-      }
-    }
-
-    return true;
-  });
-
-  if (missingFunctions.length === 0) {
-    console.log('✅ AI已识别所有功能，无需补充');
-    return functionList;
-  }
-
-  console.log(`\n🎯 发现 ${missingFunctions.length} 个AI遗漏的功能，正在补充...`);
-
-  // 确保有modules数组
-  if (!functionList.modules) {
-    functionList.modules = [];
-  }
-
-  // 按类型分组添加
-  const typeGroups = {};
-  missingFunctions.forEach(fn => {
-    const type = fn.type || '其他';
-    if (!typeGroups[type]) {
-      typeGroups[type] = [];
-    }
-    typeGroups[type].push(fn);
-  });
-
-  // 为每种类型创建或找到对应的模块
-  let nextId = (functionList.totalFunctions || 0) + 1;
-
-  Object.entries(typeGroups).forEach(([type, funcs]) => {
-    const moduleName = `${type}功能（规则引擎补充）`;
-
-    // 尝试找到现有的类似模块
-    let targetModule = functionList.modules.find(m =>
-      m.moduleName.includes(type) || m.moduleName.includes('补充')
-    );
-
-    if (!targetModule) {
-      targetModule = {
-        moduleName,
-        functions: []
-      };
-      functionList.modules.push(targetModule);
-    }
-
-    if (!targetModule.functions) {
-      targetModule.functions = [];
-    }
-
-    // 添加功能
-    funcs.forEach(fn => {
-      targetModule.functions.push({
-        id: nextId++,
-        name: fn.name,
-        triggerType: fn.triggerType,
-        description: fn.description,
-        dataObjects: [fn.name.replace(/^(查询|导出|导入|生成|读取|写入|统计|汇总|计算|配置|部署|集成)/, '')],
-        _autoAdded: true,
-        _source: 'rule-engine'
-      });
-      console.log(`  ✅ 补充: [${type}] ${fn.name}`);
-    });
-  });
-
-  // 更新总功能数
-  functionList.totalFunctions = (functionList.totalFunctions || 0) + missingFunctions.length;
-
-  console.log(`\n📊 合并完成，功能总数: ${functionList.totalFunctions}`);
-
-  return functionList;
-}
-
 // ═══════════════════════════════════════════════════════════
 // 🔧 自动补充缺失的查询/导出功能
 // ═══════════════════════════════════════════════════════════
@@ -3727,16 +3560,13 @@ function autoAddMissingQueryExportFunctions(functionList, documentContent) {
     });
   }
 
-  // 检查是否已有查询/导出功能
+  // 检查是否已有查询/导出功能（移除这些全局标志，改用具体匹配）
+  /*
   const hasQueryFunction = existingFunctions.some(name =>
     name.includes('查询') || name.includes('搜索') || name.includes('筛选')
   );
-  const hasExportFunction = existingFunctions.some(name =>
-    name.includes('导出') || name.includes('下载') || name.includes('export')
-  );
-  const hasImportFunction = existingFunctions.some(name =>
-    name.includes('导入') || name.includes('上传') || name.includes('import')
-  );
+  // ...
+  */
 
   // 用于存储新增的功能
   const newFunctions = [];
@@ -3760,12 +3590,17 @@ function autoAddMissingQueryExportFunctions(functionList, documentContent) {
 
   pageContexts.forEach(context => {
     const { pageName, hasQuery, hasExport, hasImport, hasJump, jumpDetails } = context;
+    // 清理页面名称，移除前导动词、符号和序号
+    const cleanedPageName = pageName
+      .replace(/^[\s\n#\d\.、]+/, '') // 移除前导空白、#、数字、点、顿号
+      .replace(/^(?:生成|统计|汇总|分析|计算|评估|展示|导出|导入|查询|进行|支持|查看)/, '') // 移除前导动词
+      .trim();
 
-    console.log(`  - ${pageName}: 查询=${hasQuery}, 导出=${hasExport}, 导入=${hasImport}, 跳转=${hasJump}`);
+    console.log(`  - ${pageName} (清理后: ${cleanedPageName}): 查询=${hasQuery}, 导出=${hasExport}, 导入=${hasImport}, 跳转=${hasJump}`);
 
     // 补充查询功能
-    if (hasQuery && !hasQueryFunction) {
-      const queryFunctionName = `查询${pageName}数据`;
+    if (hasQuery) {
+      const queryFunctionName = `${cleanedPageName}查询`;
       if (!existingFunctions.includes(queryFunctionName.toLowerCase())) {
         newFunctions.push({
           id: nextId++,
@@ -3780,8 +3615,8 @@ function autoAddMissingQueryExportFunctions(functionList, documentContent) {
     }
 
     // 补充导出功能
-    if (hasExport && !hasExportFunction) {
-      const exportFunctionName = `导出${pageName}数据`;
+    if (hasExport) {
+      const exportFunctionName = `${cleanedPageName}导出`;
       if (!existingFunctions.includes(exportFunctionName.toLowerCase())) {
         newFunctions.push({
           id: nextId++,
@@ -3796,8 +3631,8 @@ function autoAddMissingQueryExportFunctions(functionList, documentContent) {
     }
 
     // 补充导入功能
-    if (hasImport && !hasImportFunction) {
-      const importFunctionName = `导入${pageName}数据`;
+    if (hasImport) {
+      const importFunctionName = `${cleanedPageName}导入`;
       if (!existingFunctions.includes(importFunctionName.toLowerCase())) {
         newFunctions.push({
           id: nextId++,
@@ -3872,13 +3707,17 @@ function autoAddMissingQueryExportFunctions(functionList, documentContent) {
  */
 function extractPageContexts(documentContent) {
   const contexts = [];
+  const foundPageNames = new Set(); // 用于去重
 
-  // 模式1：查找 "XXX表" 或 "XXX页面" 后跟 "功能界面说明"
-  const sectionPattern = /([^\n]{3,60}?(?:表|页面|界面|模块|统计表|评估表|详情表|汇总表|分析表|综合评估)(?:-[日周月])?)[^\n]*\n(?:[^\n]*\n){0,10}?(?:功能界面说明|功能页面说明|功能说明)[^\n]*\n((?:[^\n]*\n){1,20})/gi;
+  // 模式1：查找 "XXX" 后跟 "功能界面说明"
+  // 改进正则表达式：
+  // 1. 明确排除以 "将"、"按"、"由于" 等虚词开头的行（通常是描述性句子而非标题）
+  // 2. 增加对 Markdown 标题 (#) 或 数字标题的优先支持
+  const sectionPattern = /((?:^|\n)(?:#+\s*|\d+[.、]\s*)?[^\n将按由于]{2,60}?(?:表|页面|界面|模块|统计|评估|详情|汇总|分析|综合|检测|监控|报表)(?:-[日周月])?)[^\n]*\n(?:[^\n]*\n){0,10}?(?:功能界面说明|功能页面说明|功能说明|界面说明)[^\n]*\n((?:[^\n]*\n){1,20})/gi;
 
   let match;
   while ((match = sectionPattern.exec(documentContent)) !== null) {
-    const pageName = match[1].replace(/^\d+[\.\s]+/, '').trim();
+    const pageName = match[1].replace(/^\d+[\.\\s]+/, '').trim();
     const functionDesc = match[2];
 
     // 检查功能描述中是否有查询/导出/导入
@@ -3898,18 +3737,172 @@ function extractPageContexts(documentContent) {
     }
 
     if (hasQuery || hasExport || hasImport || hasJump) {
+      if (!foundPageNames.has(pageName)) {
+        foundPageNames.add(pageName);
+        contexts.push({
+          pageName,
+          hasQuery,
+          hasExport,
+          hasImport,
+          hasJump,
+          jumpDetails
+        });
+      }
+    }
+  }
+
+  // 🚨 模式1.5：专门针对 "粒度" 类标题（日粒度、周粒度、月粒度）
+  // 这类标题常见格式：日粒度小区业务感知健康度&质差评估
+  const granularityPattern = /((?:^|\n)(?:#+\s*|\d+[\.\d]*[.、]?\s*)?[日周月5五分分钟小时]粒度[^\n]{2,50})[^\n]*\n(?:[^\n]*\n){0,15}?(?:功能界面说明|功能页面说明|功能说明|界面说明)[^\n]*\n((?:[^\n]*\n){1,25})/gi;
+
+  while ((match = granularityPattern.exec(documentContent)) !== null) {
+    const rawPageName = match[1].replace(/^[\s\n#\d\.\、]+/, '').trim();
+    // 清理页面名称，保留核心内容
+    const pageName = rawPageName.replace(/[&＆]+/g, '').replace(/\s+/g, '');
+    const functionDesc = match[2];
+
+    console.log(`📋 模式1.5匹配到粒度标题: "${pageName}"`);
+    console.log(`   功能描述内容: "${functionDesc.substring(0, 100)}..."`);
+
+    // 检查功能描述中是否有查询/导出/导入
+    const hasQuery = /支持查询|查询功能|条件查询/i.test(functionDesc);
+    const hasExport = /支持导出|导出功能|Excel导出/i.test(functionDesc);
+    const hasImport = /支持导入|导入功能|批量导入/i.test(functionDesc);
+    const hasJump = /点击.*跳转|跳转至|跳转到/i.test(functionDesc);
+
+    if ((hasQuery || hasExport || hasImport || hasJump) && !foundPageNames.has(pageName)) {
+      foundPageNames.add(pageName);
       contexts.push({
         pageName,
         hasQuery,
         hasExport,
         hasImport,
         hasJump,
-        jumpDetails
+        jumpDetails: []
       });
+      console.log(`   ✅ 识别到: 查询=${hasQuery}, 导出=${hasExport}`);
     }
   }
 
-  // 模式2：如果上面没找到，尝试直接搜索 "支持查询" 和 "支持导出"
+  // 🚨 模式1.6：向上回溯法 - 找到"功能界面说明"后向上查找最近的标题
+  const lines = documentContent.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+
+    // 检查是否是"功能界面说明"行
+    if (/^(?:\d+[\.\d]*[.、]?\s*)?(?:功能界面说明|功能页面说明|功能说明|界面说明)\s*$/.test(line)) {
+      // 向下查找功能描述（支持查询、支持导出等）
+      let functionDescLines = [];
+      let hasQuery = false;
+      let hasExport = false;
+      let hasImport = false;
+
+      for (let j = i + 1; j < Math.min(i + 20, lines.length); j++) {
+        const descLine = lines[j].trim();
+        if (!descLine) continue;
+
+        // 如果遇到新标题则停止
+        if (/^(?:\d+[\.\d]*[.、]\s*)?[^\d\s]/.test(descLine) &&
+          !descLine.includes('支持') &&
+          descLine.length < 60 &&
+          /[表页面模块界面统计评估详情汇总分析]/.test(descLine)) {
+          break;
+        }
+
+        functionDescLines.push(descLine);
+        if (/支持查询|查询功能|条件查询/i.test(descLine)) hasQuery = true;
+        if (/支持导出|导出功能|Excel导出/i.test(descLine)) hasExport = true;
+        if (/支持导入|导入功能|批量导入/i.test(descLine)) hasImport = true;
+      }
+
+      // 如果找到了查询/导出功能，向上查找标题
+      if (hasQuery || hasExport || hasImport) {
+        let pageName = null;
+
+        // 向上查找最近的标题（最多回溯20行）
+        for (let k = i - 1; k >= Math.max(0, i - 20); k--) {
+          const titleLine = lines[k].trim();
+          if (!titleLine) continue;
+
+          // 跳过描述性句子（以"将"、"按"、"通过"等开头）
+          if (/^[将按由于通过根据基于为了]/.test(titleLine)) continue;
+
+          // 检查是否是标题行（包含关键词或以#/数字开头）
+          if (/[日周月]粒度/.test(titleLine) ||
+            /(?:表|页面|界面|模块|统计|评估|详情|汇总|分析|综合|检测|监控|报表|健康度)/.test(titleLine) ||
+            /^#+\s/.test(titleLine) ||
+            /^\d+[\.\d]*[.、]\s*[^\s]/.test(titleLine)) {
+            pageName = titleLine
+              .replace(/^#+\s*/, '')
+              .replace(/^\d+[\.\d]*[.、]\s*/, '')
+              .replace(/[&＆]+/g, '')
+              .trim();
+
+            if (pageName.length > 3 && pageName.length < 60) {
+              break;
+            }
+          }
+        }
+
+        if (pageName && !foundPageNames.has(pageName)) {
+          foundPageNames.add(pageName);
+          contexts.push({
+            pageName,
+            hasQuery,
+            hasExport,
+            hasImport,
+            hasJump: false,
+            jumpDetails: []
+          });
+          console.log(`📋 模式1.6回溯法识别到: "${pageName}"`);
+          console.log(`   ✅ 查询=${hasQuery}, 导出=${hasExport}`);
+        }
+      }
+    }
+  }
+
+  // 🚨 模式2.5：扫描文档中所有"粒度"相关的章节
+  // 专门处理类似格式：
+  // 日粒度小区业务感知健康度&质差评估
+  // ...描述...
+  // 功能界面说明
+  // 1、支持查询...
+  // 2、支持导出
+  const granularityHeaders = documentContent.match(/(?:^|\n)(?:#+\s*|\d+[\.\d]*[.、]?\s*)?[日周月5五分分钟小时]粒度[^\n]{2,60}/gi) || [];
+
+  for (const header of granularityHeaders) {
+    const headerClean = header.replace(/^[\s\n#\d\.\、]+/, '').replace(/[&＆]+/g, '').trim();
+
+    if (foundPageNames.has(headerClean)) continue; // 已处理过
+
+    // 查找该标题后的内容
+    const headerIndex = documentContent.indexOf(header);
+    if (headerIndex === -1) continue;
+
+    const afterHeader = documentContent.substring(headerIndex, headerIndex + 3000);
+
+    // 检查后续内容是否有"功能界面说明"以及"支持查询/导出"
+    const hasUISection = /功能界面说明|功能页面说明|功能说明|界面说明/.test(afterHeader);
+    const hasQuery = /支持查询|条件查询|查询功能/.test(afterHeader);
+    const hasExport = /支持导出|导出功能|Excel导出/.test(afterHeader);
+    const hasImport = /支持导入|导入功能|批量导入/.test(afterHeader);
+
+    if (hasUISection && (hasQuery || hasExport || hasImport)) {
+      foundPageNames.add(headerClean);
+      contexts.push({
+        pageName: headerClean,
+        hasQuery,
+        hasExport,
+        hasImport,
+        hasJump: false,
+        jumpDetails: []
+      });
+      console.log(`📋 模式2.5扫描粒度章节识别到: "${headerClean}"`);
+      console.log(`   ✅ 查询=${hasQuery}, 导出=${hasExport}, 导入=${hasImport}`);
+    }
+  }
+
+  // 模式3：如果上面都没找到，尝试直接搜索 "支持查询" 和 "支持导出"
   if (contexts.length === 0) {
     // 查找最近的表名
     const tableNames = documentContent.match(/([^\n]{3,40}?(?:表|页面|统计表|评估表|详情表|汇总表|分析表)(?:-[日周月])?)/g) || [];
@@ -3920,7 +3913,7 @@ function extractPageContexts(documentContent) {
 
     if ((hasQueryInDoc || hasExportInDoc || hasImportInDoc) && tableNames.length > 0) {
       // 使用找到的第一个表名作为上下文
-      const defaultPageName = tableNames[0].replace(/^\d+[\.\s]+/, '').trim();
+      const defaultPageName = tableNames[0].replace(/^\d+[\.\\s]+/, '').trim();
       contexts.push({
         pageName: defaultPageName,
         hasQuery: hasQueryInDoc,
@@ -3931,6 +3924,11 @@ function extractPageContexts(documentContent) {
       });
     }
   }
+
+  console.log(`\n📊 extractPageContexts 总计识别到 ${contexts.length} 个页面上下文`);
+  contexts.forEach((ctx, idx) => {
+    console.log(`   ${idx + 1}. ${ctx.pageName}: 查询=${ctx.hasQuery}, 导出=${ctx.hasExport}`);
+  });
 
   return contexts;
 }

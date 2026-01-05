@@ -89,6 +89,27 @@ if (-not $nodeInstalled) {
 }
 Write-Host ""
 
+# 检查并清理残留进程
+Write-Host "[1.5/4] 🧹 正在清理残留进程..." -ForegroundColor Cyan
+$ports = @(2617, 3001, 3002, 5173)
+foreach ($port in $ports) {
+    $connections = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -gt 4 }
+    if ($connections) {
+        $pids = $connections | Select-Object -ExpandProperty OwningProcess -Unique
+        foreach ($pid in $pids) {
+            try {
+                Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+                Write-Host "✅ 已杀死占用端口 $port 的进程: $pid" -ForegroundColor Green
+            } catch {
+                Write-Host "⚠️ 无法杀死进程 $pid (端口 $port)" -ForegroundColor Yellow
+            }
+        }
+    }
+}
+Start-Sleep -Seconds 1
+Write-Host "✅ 端口清理完成" -ForegroundColor Green
+Write-Host ""
+
 # 检查并安装依赖
 Write-Host "[2/4] 📦 检查项目依赖..." -ForegroundColor Cyan
 
