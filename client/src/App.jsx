@@ -65,7 +65,7 @@ function App() {
     return 30;
   });
   // 拆分模式: 'quantity' = 数量优先, 'quality' = 质量优先, 'three-layer' = 三层分析框架, 'two-step' = 两步骤COSMIC拆分
-  const [splitMode, setSplitMode] = useState('quality');
+  const [splitMode, setSplitMode] = useState('two-step');
   const [understanding, setUnderstanding] = useState(null);
   const [analysisPhase, setAnalysisPhase] = useState(''); // 'understanding' | 'splitting' | 'reviewing' | ''
   const [currentModuleIndex, setCurrentModuleIndex] = useState(0);
@@ -124,12 +124,27 @@ function App() {
 
   // 检查API状态和是否需要显示配置弹窗
   useEffect(() => {
-    checkApiStatus();
-    // 检查是否已配置过API Key，如果没有则显示配置弹窗
-    const savedApiKey = window.localStorage.getItem('userApiKey');
-    if (!savedApiKey) {
-      setShowApiSetupModal(true);
-    }
+    const initApi = async () => {
+      await checkApiStatus();
+      // 检查是否已配置过API Key
+      const savedApiKey = window.localStorage.getItem('userApiKey');
+      if (savedApiKey) {
+        // 如果本地有Key但后端没连上（比如重启了），自动同步一次
+        try {
+          await axios.post('/api/config', {
+            apiKey: savedApiKey,
+            baseUrl: 'https://api.siliconflow.cn/v1'
+          });
+          await checkApiStatus();
+        } catch (e) {
+          console.error('自动同步API Key失败:', e);
+        }
+      } else {
+        // 如果没有则显示配置弹窗
+        setShowApiSetupModal(true);
+      }
+    };
+    initApi();
   }, []);
 
   // 持久化最小功能过程数量
@@ -1744,36 +1759,8 @@ ${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能
 
             {/* 拆分模式切换 */}
             <div className="flex items-center bg-[#EDEAE5] rounded-lg p-1">
-              <button
-                onClick={() => handleSplitModeChange('quality')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${splitMode === 'quality'
-                  ? 'bg-white text-[#D97757] shadow-sm'
-                  : 'text-[#6B6760] hover:text-[#1A1915]'
-                  }`}
-              >
-                <Sparkles className="w-4 h-4" />
-                <span>质量优先</span>
-              </button>
-              <button
-                onClick={() => handleSplitModeChange('quantity')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${splitMode === 'quantity'
-                  ? 'bg-white text-[#D97757] shadow-sm'
-                  : 'text-[#6B6760] hover:text-[#1A1915]'
-                  }`}
-              >
-                <Target className="w-4 h-4" />
-                <span>数量优先</span>
-              </button>
-              <button
-                onClick={() => handleSplitModeChange('three-layer')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${splitMode === 'three-layer'
-                  ? 'bg-white text-[#D97757] shadow-sm'
-                  : 'text-[#6B6760] hover:text-[#1A1915]'
-                  }`}
-              >
-                <Brain className="w-4 h-4" />
-                <span>三层分析框架</span>
-              </button>
+
+
               <button
                 onClick={() => handleSplitModeChange('two-step')}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${splitMode === 'two-step'
@@ -1844,11 +1831,20 @@ ${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能
               <span>{selectedModel === 'deepseek' ? 'DeepSeek-R1' : '智谱GLM'}</span>
             </button>
 
+            {/* 密钥重新写入按钮 */}
+            <button
+              onClick={() => setShowApiSetupModal(true)}
+              className="p-2 text-[#6B6760] hover:text-[#D97757] hover:bg-[#EDEAE5] rounded-lg transition-all"
+              title="重新配置API密钥"
+            >
+              <Zap className="w-4 h-4" />
+            </button>
+
             {/* 设置按钮 */}
             <button
               onClick={() => setShowSettings(true)}
               className="p-2 text-[#6B6760] hover:text-[#1A1915] hover:bg-[#EDEAE5] rounded-lg transition-all"
-              title="API设置"
+              title="其它参数设置"
             >
               <Settings className="w-4 h-4" />
             </button>
