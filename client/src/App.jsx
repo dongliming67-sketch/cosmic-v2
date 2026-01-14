@@ -257,6 +257,29 @@ function App() {
     setTimeout(() => setToastMessage(''), 2500);
   };
 
+  // 获取用户API配置（用于开放平台模式，每个请求携带用户自己的配置）
+  const getUserConfig = () => {
+    const savedApiKey = window.localStorage.getItem('userApiKey');
+    const savedModel = window.localStorage.getItem('selectedModel') || 'deepseek-32b';
+
+    if (!savedApiKey) return null;
+
+    // 根据模型选择确定具体的模型名称
+    let modelName = 'deepseek-ai/DeepSeek-R1-Distill-Qwen-32B';
+    if (savedModel === 'deepseek-r1') {
+      modelName = 'deepseek-ai/DeepSeek-R1';
+    } else if (savedModel === 'deepseek-v3') {
+      modelName = 'deepseek-ai/DeepSeek-V3.2';
+    }
+
+    return {
+      apiKey: savedApiKey,
+      baseUrl: 'https://api.siliconflow.cn/v1',
+      model: modelName,
+      provider: 'openai'
+    };
+  };
+
   // 切换拆分模式
   const handleSplitModeChange = (mode) => {
     setSplitMode(mode);
@@ -480,7 +503,8 @@ function App() {
 
       try {
         const understandRes = await axios.post('/api/quality-analyze/understand', {
-          documentContent: content
+          documentContent: content,
+          userConfig: getUserConfig()
         }, { signal });
 
         if (understandRes.data.success) {
@@ -594,8 +618,9 @@ ${modulesSummary || '暂无模块信息'}
           previousResults: allTableData,
           round: round,
           targetFunctions: minFunctionCount,
-          understanding: documentUnderstanding, // 传递文档理解结果
-          userGuidelines: guidelines
+          understanding: documentUnderstanding,
+          userGuidelines: guidelines,
+          userConfig: getUserConfig()
         }, { signal });
 
         if (response.data.success) {
@@ -1063,7 +1088,8 @@ ${breakdownSummary}
       // 调用功能清单提取API - 传递用户限制条件
       const response = await axios.post('/api/extract-function-list', {
         documentContent: content,
-        userGuidelines: guidelines  // 将用户限制条件传递给后端
+        userGuidelines: guidelines,
+        userConfig: getUserConfig()
       }, { signal });
 
       if (response.data.success) {
@@ -1215,7 +1241,8 @@ ${breakdownSummary}
           confirmedFunctions: selectedFunctions,
           previousResults: allTableData,
           round: round,
-          processedIndex: processedIndex  // ⚠️ 新增：传递已处理的索引位置
+          processedIndex: processedIndex,
+          userConfig: getUserConfig()
         });
 
         // ⚠️ 调试日志：输出响应中的索引信息
@@ -1609,7 +1636,8 @@ ${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能
 
     try {
       const res = await axios.post('/api/two-step/extract-functions', {
-        documentContent
+        documentContent,
+        userConfig: getUserConfig()
       });
 
       if (res.data.success) {
@@ -1655,7 +1683,8 @@ ${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能
 
     try {
       const res = await axios.post('/api/two-step/cosmic-split', {
-        functionProcessList: twoStepFunctionList
+        functionProcessList: twoStepFunctionList,
+        userConfig: getUserConfig()
       });
 
       if (res.data.success) {

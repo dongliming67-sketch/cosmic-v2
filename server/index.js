@@ -94,11 +94,11 @@ const { STEP1_FUNCTION_EXTRACTION_PROMPT, STEP2_COSMIC_SPLIT_PROMPT } = require(
 
 // 通用AI调用助手 (集成Gemini和其他提供商)
 async function callAIChat(options) {
-  const { messages, temperature = 0.7, max_tokens = 8000, stream = false, res = null } = options;
+  const { messages, temperature = 0.7, max_tokens = 8000, stream = false, res = null, userConfig = null } = options;
 
-  const clientConfig = getActiveClientConfig();
+  const clientConfig = getActiveClientConfig(userConfig);
   if (!clientConfig) {
-    throw new Error('请先配置API密钥（支持Gemini, 智谱, OpenRouter等）');
+    throw new Error('请先配置API密钥');
   }
 
   const { client, model, useGeminiSDK, useGroqSDK } = clientConfig;
@@ -299,31 +299,26 @@ const COSMIC_SYSTEM_PROMPT = `你是一个顶级COSMIC分析专家与业务架�
 
 // API路由
 
-// 健康检查
+// 健康检查 (开放平台模式：密钥由用户浏览器保存，这里返回true以便UI正常显示)
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
-    hasApiKey: !!(process.env.OPENAI_API_KEY || process.env.GEMINI_API_KEY || process.env.ZHIPU_API_KEY || process.env.GROQ_API_KEY),
-    provider: process.env.THREE_LAYER_PROVIDER || 'auto',
-    baseUrl: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1'
+    hasApiKey: true, // 开放平台模式：密钥由前端每请求携带，无需服务端预设
+    provider: 'openai',
+    baseUrl: 'https://api.siliconflow.cn/v1'
   });
 });
 
-// 更新API配置
+// 更新API配置 (开放平台模式下，仅返回成功，实际配置由前端每请求带上)
 app.post('/api/config', (req, res) => {
   const { apiKey, baseUrl } = req.body;
 
-  if (apiKey) {
-    process.env.OPENAI_API_KEY = apiKey;
-  }
-  if (baseUrl) {
-    process.env.OPENAI_BASE_URL = baseUrl;
+  // 验证一下格式
+  if (apiKey && apiKey.includes('你的') && apiKey.includes('密钥')) {
+    return res.status(400).json({ error: '请填入真实的 API Key，不要包含中文占位符' });
   }
 
-  // 重置客户端以使用新配置
-  openai = null;
-
-  res.json({ success: true, message: 'API配置已更新' });
+  res.json({ success: true, message: 'API配置已更新（本地生效）' });
 });
 
 // 解析文档（支持多种格式）
@@ -429,7 +424,7 @@ app.post('/api/chat', async (req, res) => {
 // 流式AI对话 - 增强版：支持后续要求生成cosmic并同步到表格
 app.post('/api/chat/stream', async (req, res) => {
   try {
-    const { messages, documentContent, existingTableData = [], generateCosmic = false, userGuidelines = '' } = req.body;
+    const { messages, documentContent, existingTableData = [], generateCosmic = false, userGuidelines = '', userConfig = null } = req.body;
 
     console.log('收到流式对话请求，文档长度:', documentContent?.length || 0, '生成COSMIC:', generateCosmic);
 
@@ -489,7 +484,8 @@ app.post('/api/chat/stream', async (req, res) => {
     await callAIChat({
       messages: chatMessages,
       stream: true,
-      res
+      res,
+      userConfig
     });
 
     res.write('data: [DONE]\n\n');
@@ -507,7 +503,7 @@ app.post('/api/chat/stream', async (req, res) => {
 // 循环调用 - 继续生成直到完成所有功能过程（数量优先模式 - 增强版：同步质量优先的深度思考）
 app.post('/api/continue-analyze', async (req, res) => {
   try {
-    const { documentContent, previousResults = [], round = 1, targetFunctions = 30, understanding = null, userGuidelines = '' } = req.body;
+    const { documentContent, previousResults = [], round = 1, targetFunctions = 30, understanding = null, userGuidelines = '', userConfig = null } = req.body;
 
     // 构建已完成的功能过程列表
 
@@ -675,7 +671,8 @@ ${uniqueCompleted.slice(0, 30).join('、')}${uniqueCompleted.length > 30 ? '...'
         systemMessage,
         { role: 'user', content: userPrompt }
       ],
-      temperature: 0.5
+      temperature: 0.5,
+      userConfig
     });
 
 
@@ -734,7 +731,7 @@ ${uniqueCompleted.slice(0, 30).join('、')}${uniqueCompleted.length > 30 ? '...'
 // 与数量优先类似的循环调用方式，但使用更高质量的prompt确保功能过程质量
 app.post('/api/quality-continue-analyze', async (req, res) => {
   try {
-    const { documentContent, previousResults = [], round = 1, targetFunctions = 30, understanding = null, userGuidelines = '' } = req.body;
+    const { documentContent, previousResults = [], round = 1, targetFunctions = 30, understanding = null, userGuidelines = '', userConfig = null } = req.body;
 
     // 构建已完成的功能过程列表
 
@@ -1080,7 +1077,7 @@ const QUALITY_FIRST_SYSTEM_PROMPT = `你是一个顶级COSMIC功能点分析专�
 // 质量优先分析 - 第一阶段：深度理解文档（增强版 - 确保功能点完整覆盖）
 app.post('/api/quality-analyze/understand', async (req, res) => {
   try {
-    const { documentContent, imageDescriptions = [], userGuidelines = '' } = req.body;
+    const { documentContent, imageDescriptions = [], userGuidelines = '', userConfig = null } = req.body;
 
     console.log('质量优先分析 - 第一阶段：深度理解文档（增强版）...', userGuidelines ? `用户指导：${userGuidelines}` : '');
 
@@ -1197,7 +1194,8 @@ ${imageContext}
         { role: 'user', content: understandPrompt }
       ],
       temperature: 0.3,
-      max_tokens: 4000
+      max_tokens: 4000,
+      userConfig
     });
 
 
@@ -1292,7 +1290,8 @@ ${uniqueCompleted.length > 0 ? `## 已完成的功能过程（请勿重复）\n$
         { role: 'system', content: QUALITY_FIRST_SYSTEM_PROMPT },
         { role: 'user', content: splitPrompt }
       ],
-      temperature: 0.5
+      temperature: 0.5,
+      userConfig
     });
 
 
@@ -1384,7 +1383,7 @@ ${uniqueFunctions.length < expectedCount * 0.7 ? `
   }
 });
 
-// ========== 三层分析框架模式 API（使用智谱API） ==========
+// ========== 三层分析框架模式 API ==========
 app.post('/api/three-layer-analyze', (req, res) => {
   threeLayerAnalyze(req, res, getOpenAIClient);
 });
@@ -1404,13 +1403,13 @@ app.post('/api/split-from-function-list', (req, res) => {
 // 步骤1：功能过程识别（从需求文档中提取功能过程）
 app.post('/api/two-step/extract-functions', async (req, res) => {
   try {
-    const { documentContent } = req.body;
+    const { documentContent, userConfig = null } = req.body;
 
     if (!documentContent || !documentContent.trim()) {
       return res.status(400).json({ error: '请提供需求文档内容' });
     }
 
-    const clientConfig = getActiveClientConfig();
+    const clientConfig = getActiveClientConfig(userConfig);
     if (!clientConfig) {
       return res.status(400).json({ error: '请先配置API密钥' });
     }
@@ -1554,13 +1553,13 @@ ${documentContent}
 // 步骤2：COSMIC拆分（将功能过程列表拆分为COSMIC表格）
 app.post('/api/two-step/cosmic-split', async (req, res) => {
   try {
-    const { functionProcessList } = req.body;
+    const { functionProcessList, userConfig = null } = req.body;
 
     if (!functionProcessList || !functionProcessList.trim()) {
       return res.status(400).json({ error: '请提供功能过程列表' });
     }
 
-    const clientConfig = getActiveClientConfig();
+    const clientConfig = getActiveClientConfig(userConfig);
     if (!clientConfig) {
       return res.status(400).json({ error: '请先配置API密钥' });
     }
@@ -4690,49 +4689,15 @@ app.post('/api/parse-table', async (req, res) => {
 });
 
 // 🔄 模型切换API
-app.post('/api/switch-model', (req, res) => {
+app.post('/api/switch-model', async (req, res) => {
   try {
     const { model, provider } = req.body;
-
-    console.log(`收到模型切换请求: ${model} (provider: ${provider})`);
-
-    // 根据选择的模型更新环境变量
-    if (model === 'deepseek-32b') {
-      process.env.OPENAI_API_KEY = process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY;
-      process.env.OPENAI_BASE_URL = 'https://api.siliconflow.cn/v1';
-      process.env.OPENAI_MODEL = 'deepseek-ai/DeepSeek-R1-Distill-Qwen-32B';
-      process.env.THREE_LAYER_PROVIDER = 'openai';
-      console.log('✅ 已切换到 DeepSeek-R1-Distill-Qwen-32B 模型');
-    } else if (model === 'deepseek-r1') {
-      process.env.OPENAI_API_KEY = process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY;
-      process.env.OPENAI_BASE_URL = 'https://api.siliconflow.cn/v1';
-      process.env.OPENAI_MODEL = 'deepseek-ai/DeepSeek-R1';
-      process.env.THREE_LAYER_PROVIDER = 'openai';
-      console.log('✅ 已切换到 DeepSeek-R1 模型');
-    } else if (model === 'deepseek-v3') {
-      process.env.OPENAI_API_KEY = process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY;
-      process.env.OPENAI_BASE_URL = 'https://api.siliconflow.cn/v1';
-      process.env.OPENAI_MODEL = 'deepseek-ai/DeepSeek-V3.2';
-      process.env.THREE_LAYER_PROVIDER = 'openai';
-      console.log('✅ 已切换到 DeepSeek-V3.2 模型');
-    } else if (model === 'zhipu') {
-      process.env.OPENAI_API_KEY = process.env.ZHIPU_API_KEY;
-      process.env.OPENAI_BASE_URL = process.env.ZHIPU_BASE_URL;
-      process.env.OPENAI_MODEL = process.env.ZHIPU_MODEL;
-      process.env.THREE_LAYER_PROVIDER = 'zhipu';
-      console.log('✅ 已切换到 智谱GLM-4.5-Flash 模型');
-    }
-
-    // 重置客户端，下次调用时会用新的配置重新初始化
-    openai = null;
-
     res.json({
       success: true,
-      message: `已切换到 ${model} 模型`,
+      message: `已切换到 ${model} 模型（本地生效）`,
       config: {
-        model: process.env.OPENAI_MODEL,
-        baseUrl: process.env.OPENAI_BASE_URL,
-        provider: process.env.THREE_LAYER_PROVIDER
+        model,
+        provider
       }
     });
   } catch (error) {

@@ -83,9 +83,70 @@ function getOpenRouterFallbackModels() {
   return fallbackStr.split(',').map(m => m.trim()).filter(m => m.length > 0);
 }
 
-// 获取当前激活的客户端和模型配置
-function getActiveClientConfig() {
-  // THREE_LAYER_PROVIDER: 'gemini' | 'zhipu' | 'groq' | 'openrouter' | 'auto'（默认auto，自动检测可用客户端）
+// 获取当前激活的客户端和模型配置 (支持传入用户配置以实现开放平台模式)
+function getActiveClientConfig(userConfig = null) {
+  // 如果提供了用户配置，优先使用
+  if (userConfig && userConfig.apiKey) {
+    const provider = (userConfig.provider || 'openai').toLowerCase();
+    const apiKey = userConfig.apiKey;
+    const baseUrl = userConfig.baseUrl || 'https://api.openai.com/v1';
+    const model = userConfig.model || 'gpt-3.5-turbo';
+
+    console.log(`[Open Platform] 使用用户提供的配置: Provider=${provider}, Model=${model}`);
+
+    if (provider === 'gemini') {
+      try {
+        const { GoogleGenerativeAI } = require('@google/generative-ai');
+        const geminiClient = new GoogleGenerativeAI(apiKey);
+        const modelObj = geminiClient.getGenerativeModel({ model: model || 'gemini-2.0-flash' });
+        return {
+          client: modelObj,
+          model: model || 'gemini-2.0-flash',
+          fallbackModels: [],
+          provider: 'gemini',
+          useGroqSDK: false,
+          useGeminiSDK: true
+        };
+      } catch (err) {
+        console.error('Gemini SDK 初始化失败:', err.message);
+      }
+    }
+
+    if (provider === 'groq') {
+      try {
+        const Groq = require('groq-sdk');
+        const groqClient = new Groq({ apiKey });
+        return {
+          client: groqClient,
+          model: model || 'llama-3.3-70b-versatile',
+          fallbackModels: [],
+          provider: 'groq',
+          useGroqSDK: true,
+          useGeminiSDK: false
+        };
+      } catch (err) {
+        console.error('Groq SDK 初始化失败:', err.message);
+      }
+    }
+
+    // 默认 OpenAI 兼容模式 (包括智谱、SiliconFlow/DeepSeek 等)
+    const client = new OpenAI({
+      apiKey: apiKey,
+      baseURL: baseUrl
+    });
+
+    return {
+      client,
+      model,
+      fallbackModels: [],
+      provider: provider,
+      useGroqSDK: false,
+      useGeminiSDK: false
+    };
+  }
+
+  // 以下为回退逻辑：使用环境变量（原有逻辑）
+  // THREE_LAYER_PROVIDER: 'gemini' | 'zhipu' | 'groq' | 'openrouter' | 'auto'
   const provider = (process.env.THREE_LAYER_PROVIDER || 'auto').toLowerCase();
 
   // Google Gemini 直接API - 推荐，官方SDK稳定性高
@@ -247,7 +308,7 @@ function getActiveClientConfig() {
 // 三层分析框架 - 循环调用API（支持智谱、Groq和OpenRouter三选择）
 async function threeLayerAnalyze(req, res, getOpenAIClient) {
   try {
-    const { documentContent, previousResults = [], round = 1, targetFunctions = 30, understanding = null, userGuidelines = '', provider = null } = req.body;
+    const { documentContent, previousResults = [], round = 1, targetFunctions = 30, understanding = null, userGuidelines = '', provider = null, userConfig = null } = req.body;
 
     // 如果前端指定了provider，临时覆盖环境变量
     const originalProvider = process.env.THREE_LAYER_PROVIDER;
@@ -256,8 +317,8 @@ async function threeLayerAnalyze(req, res, getOpenAIClient) {
       console.log(`三层分析框架 - 使用前端指定的提供商: ${provider}`);
     }
 
-    // 尝试获取专用客户端配置
-    let clientConfig = getActiveClientConfig();
+    // 尝试获取客户端配置 (优先使用请求中的 userConfig)
+    let clientConfig = getActiveClientConfig(userConfig);
 
     // 恢复原始环境变量
     if (provider && originalProvider !== undefined) {
@@ -984,13 +1045,13 @@ function splitLargeSection(sectionContent, maxSize) {
 // ═══════════════════════════════════════════════════════════
 async function extractFunctionList(req, res) {
   try {
-    const { documentContent, enableChunking = true, maxIterations = 3, userGuidelines = '' } = req.body;
+    const { documentContent, enableChunking = true, maxIterations = 3, userGuidelines = '', userConfig = null } = req.body;
 
     if (!documentContent) {
       return res.status(400).json({ error: '请提供文档内容' });
     }
 
-    let clientConfig = getActiveClientConfig();
+    let clientConfig = getActiveClientConfig(userConfig);
     if (!clientConfig) {
       return res.status(400).json({ error: '请先配置API密钥' });
     }
@@ -3353,7 +3414,7 @@ function extractFunctionListFromText(text) {
 // ═══════════════════════════════════════════════════════════
 async function splitFromFunctionList(req, res) {
   try {
-    const { documentContent, confirmedFunctions, previousResults = [], round = 1, processedIndex = 0 } = req.body;
+    const { documentContent, confirmedFunctions, previousResults = [], round = 1, processedIndex = 0, userConfig = null } = req.body;
 
     // ⚠️ 调试日志：检查接收到的参数
     console.log(`\n${'='.repeat(60)}`);
@@ -3368,7 +3429,7 @@ async function splitFromFunctionList(req, res) {
       return res.status(400).json({ error: '请提供确认的功能清单' });
     }
 
-    let clientConfig = getActiveClientConfig();
+    let clientConfig = getActiveClientConfig(userConfig);
     if (!clientConfig) {
       return res.status(400).json({ error: '请先配置API密钥' });
     }
