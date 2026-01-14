@@ -128,6 +128,8 @@ function App() {
       await checkApiStatus();
       // 检查是否已配置过API Key
       const savedApiKey = window.localStorage.getItem('userApiKey');
+      const savedModel = window.localStorage.getItem('selectedModel') || 'deepseek-32b';
+
       if (savedApiKey) {
         // 如果本地有Key但后端没连上（比如重启了），自动同步一次
         try {
@@ -135,6 +137,12 @@ function App() {
             apiKey: savedApiKey,
             baseUrl: 'https://api.siliconflow.cn/v1'
           });
+
+          // 同时同步选中的模型
+          let provider = 'openai';
+          if (savedModel === 'zhipu') provider = 'zhipu';
+          await axios.post('/api/switch-model', { model: savedModel, provider });
+
           await checkApiStatus();
         } catch (e) {
           console.error('自动同步API Key失败:', e);

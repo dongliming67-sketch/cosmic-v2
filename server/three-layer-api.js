@@ -5,9 +5,10 @@ const OpenAI = require('openai');
 // 智谱客户端（独立配置）
 let zhipuClient = null;
 function getZhipuClient() {
-  // 优先使用ZHIPU专用配置，其次使用OPENAI配置（如果baseURL指向智谱）
-  const zhipuApiKey = process.env.ZHIPU_API_KEY || process.env.OPENAI_API_KEY;
-  const zhipuBaseUrl = process.env.ZHIPU_BASE_URL || 'https://open.bigmodel.cn/api/paas/v4';
+  // 只有在明确配置了 ZHIPU_API_KEY，或者 OPENAI_BASE_URL 指向智谱时才使用
+  const hasZhipuBaseUrl = process.env.OPENAI_BASE_URL && process.env.OPENAI_BASE_URL.includes('bigmodel.cn');
+  const zhipuApiKey = process.env.ZHIPU_API_KEY || (hasZhipuBaseUrl ? process.env.OPENAI_API_KEY : null);
+  const zhipuBaseUrl = process.env.ZHIPU_BASE_URL || (hasZhipuBaseUrl ? process.env.OPENAI_BASE_URL : 'https://open.bigmodel.cn/api/paas/v4');
 
   if (!zhipuClient && zhipuApiKey) {
     zhipuClient = new OpenAI({
@@ -192,6 +193,22 @@ function getActiveClientConfig() {
         model: process.env.ZHIPU_MODEL || process.env.OPENAI_MODEL || 'glm-4-flash',
         fallbackModels: [],
         provider: 'zhipu',
+        useGroqSDK: false,
+        useGeminiSDK: false
+      };
+    }
+
+    // 新增：OpenAI 兼容（如 SiliconFlow/DeepSeek）
+    if (process.env.OPENAI_API_KEY) {
+      const openaiBaseUrl = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
+      return {
+        client: new OpenAI({
+          apiKey: process.env.OPENAI_API_KEY,
+          baseURL: openaiBaseUrl
+        }),
+        model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
+        fallbackModels: [],
+        provider: 'openai',
         useGroqSDK: false,
         useGeminiSDK: false
       };
