@@ -9,7 +9,7 @@ const fs = require('fs');
 require('dotenv').config();
 
 const app = express();
-const PORT = process.env.PORT || 2617;
+const PORT = parseInt(process.env.PORT, 10) || 2617;
 
 // 中间件
 app.use(cors({
@@ -1428,7 +1428,7 @@ app.post('/api/two-step/extract-functions', async (req, res) => {
 请在正式输出之前，先进行深度思考和分析。务必仔细阅读需求文档的每一个细节！
 
 ## 深度思考任务
-1. **通读全文**：仔细阅读整个需求文档，理解业务背景和功能目标
+1. **通读全文**：仔细阅读整个需求文档，理解业务背景 and 功能目标
 2. **识别功能边界**：明确哪些是独立的功能过程，哪些是子过程
 3. **分类触发类型**：每个功能属于用户触发、时钟触发还是接口触发
 4. **检查完整性**：确保所有查询、导出、新增、修改、删除等操作都被识别
@@ -1448,7 +1448,7 @@ app.post('/api/two-step/extract-functions', async (req, res) => {
 | "点击xxx，跳转至xxx" | 独立的跳转查询功能 | 查询xxx详情 |
 | "点击xxx查看详情" | 独立的查看功能 | 查看xxx详情 |
 | "支持自定义查询" | 独立的自定义查询功能 | 自定义条件查询xxx |
-| "重置后可以按需查询" | 独立的查询功能 | 按条件查询xxx |
+| "重制后可以按需查询" | 独立的查询功能 | 按条件查询xxx |
 
 ### 解析示例
 假设文档中写了：
@@ -1471,11 +1471,18 @@ app.post('/api/two-step/extract-functions', async (req, res) => {
 ---
 
 ## 必须遵守的规则
-- 功能过程命名：动词+名词格式（如"查询xxx指标"、"导出xxx数据"）
+- 功能过程命名：必须始终包含具体的业务对象（如"查询低空保障任务配置"）
 - 触发类型只有3种：用户触发、时钟触发、接口调用触发
 - 定时任务的功能过程必须以"定时"开头
 - 接口触发的功能过程建议写"同步xxx数据"
 - 不能写模板导出类功能、不能写模型、页面等关键字
+
+## 【极重要：业务对象具体化原则】
+
+你必须严格遵守以下命名规则，严禁生成笼统的功能过程：
+- ✅ **必须包含**：业务领域 + 具体对象 + 动作（如：查询 **低空保障** **任务** **配置信息**）
+- ❌ **严禁使用**：动词 + 通用名词（如：查询任务、导出结果、新增记录）
+- 涉及厂商时，必须带上厂商名称（华为/中兴/爱立信）
 
 ---
 
@@ -1491,7 +1498,7 @@ ${documentContent}
 ---
 
 ## 输出要求
-请严格按照以下markdown格式输出，每个独立操作都必须作为一个功能过程输出：
+请严格按照以下markdown格式输出，确保识别出所有细化的功能操作（查询、导出、详情查看、新增、修改、删除）：
 
 \`\`\`markdown
 #功能模块名称
@@ -1500,14 +1507,12 @@ ${documentContent}
 ##触发事件
 用户触发/时钟触发/接口调用触发
 ##功能过程
-动词+名词格式的功能名称
+[领域/场景][具体业务对象][操作名称]（例：查询低空保障任务配置信息）
 ##功能过程子过程详细描述
-简要描述核心数据流：输入什么->处理什么->输出什么
+详细描述业务逻辑：接收xxx请求 -> 读取xxx配置/数据 -> 执行xxx逻辑 -> 返回xxx结果
 \`\`\`
 
-重复上述格式，直到所有功能过程都已输出。
-
-现在请开始深度分析文档，确保识别出所有功能过程（包括查询、导出、跳转查询等），不要遗漏！`;
+重复上述格式，直到所有功能过程都已输出。不要输出任何解释性文字或示例表格。 现在请开始深度分析文档。`;
 
     let reply = '';
 
@@ -1564,6 +1569,17 @@ app.post('/api/two-step/cosmic-split', async (req, res) => {
     console.log('🔧 两步骤COSMIC拆分 - 第二步：COSMIC拆分');
     console.log('功能过程列表长度:', functionProcessList.length);
     console.log('='.repeat(60));
+
+    // 【调试】预解析功能过程列表，统计识别到的功能过程数量
+    const functionProcessMatches = functionProcessList.match(/##功能过程\n([^\n#]+)/g) || [];
+    const extractedFunctions = functionProcessMatches.map(m => m.replace('##功能过程\n', '').trim());
+    console.log(`📋 预解析识别到 ${extractedFunctions.length} 个功能过程:`);
+    extractedFunctions.forEach((fn, idx) => console.log(`   ${idx + 1}. ${fn}`));
+
+    // 输出功能过程列表的前500个字符（调试用）
+    console.log('📄 功能过程列表前500字符:');
+    console.log(functionProcessList.substring(0, 500));
+    console.log('...(省略)...');
 
     const { client, model, useGeminiSDK } = clientConfig;
 
@@ -1750,32 +1766,175 @@ ${functionProcessList}
         .trim();
     };
 
-    // 简化子过程描述（不超过15个字）
-    const simplifySubProcessDesc = (desc) => {
-      if (!desc || desc.length <= 15) return desc;
+    // ========== 【新增】子过程描述格式验证函数 ==========
+    // 检测子过程描述是否看起来像数据属性列表（格式错误）
+    const isInvalidSubProcessDesc = (desc) => {
+      if (!desc) return true;
 
-      // 提取关键动词和对象
-      const actionVerbs = ['接收', '读取', '获取', '查询', '写入', '保存', '更新', '删除', '返回', '呈现', '输出', '生成', '触发', '调用', '记录'];
+      // 1. 检测是否包含多个顿号分隔的词（数据属性的典型特征）
+      const commaCount = (desc.match(/[、,，]/g) || []).length;
+      if (commaCount >= 2) {
+        console.log(`⚠️ 检测到子过程描述包含${commaCount}个分隔符，疑似数据属性格式: "${desc}"`);
+        return true;
+      }
+
+      // 2. 检测是否以典型的数据属性字段名开头或结尾
+      const attrPatterns = [
+        /^(任务|地市|区县|状态|时间|编号|类型|名称|标识|参数|配置)[名称类型编号标识ID]*/,
+        /(名称|类型|编号|标识|ID|时间|状态)$/,
+      ];
+      const words = desc.split(/[、,，]/).map(w => w.trim()).filter(w => w);
+      if (words.length >= 2) {
+        const allLookLikeAttrs = words.every(word => {
+          return word.length <= 6 && !word.match(/^(接收|读取|获取|查询|写入|保存|更新|删除|返回|输出|生成|记录|处理)/);
+        });
+        if (allLookLikeAttrs) {
+          console.log(`⚠️ 所有词都像数据属性字段: "${desc}"`);
+          return true;
+        }
+      }
+
+      // 3. 检查是否包含有效的动词开头
+      const validVerbs = ['接收', '读取', '获取', '查询', '写入', '保存', '更新', '删除', '返回', '输出', '生成', '记录', '处理', '触发', '调用', '呈现', '展示', '验证', '校验'];
+      const hasValidVerb = validVerbs.some(verb => desc.includes(verb));
+
+      // 如果没有有效动词，且长度较短，可能是错误格式
+      if (!hasValidVerb && desc.length > 5 && commaCount >= 1) {
+        console.log(`⚠️ 子过程描述缺少有效动词且包含分隔符: "${desc}"`);
+        return true;
+      }
+
+      return false;
+    };
+
+    // ========== 【新增】根据上下文重新生成子过程描述 ==========
+    // 当检测到格式错误时，根据功能过程名称和数据移动类型自动生成正确的描述
+    const regenerateSubProcessDesc = (invalidDesc, functionalProcess, dataMovementType) => {
+      // 提取功能过程中的关键业务词
+      const extractBusinessKeyword = (process) => {
+        if (!process) return '业务';
+
+        // 移除动词，提取核心业务对象
+        const cleanedProcess = process
+          .replace(/^(查询|创建|删除|修改|编辑|导出|导入|统计|配置|处理|执行|启用|禁用|新增|更新|保存|读取|获取)/g, '')
+          .trim();
+
+        if (cleanedProcess.length >= 2) {
+          return cleanedProcess.slice(0, 8); // 取前8个字作为业务关键词
+        }
+        return process.slice(0, 6) || '业务';
+      };
+
+      const businessKeyword = extractBusinessKeyword(functionalProcess);
+      const moveType = (dataMovementType || '').toUpperCase();
+
+      // 根据数据移动类型生成标准格式的子过程描述
+      switch (moveType) {
+        case 'E':
+          return `接收${businessKeyword}请求`;
+        case 'R':
+          return `读取${businessKeyword}数据`;
+        case 'W':
+          return `记录${businessKeyword}结果`;
+        case 'X':
+          return `返回${businessKeyword}响应`;
+        default:
+          return `处理${businessKeyword}数据`;
+      }
+    };
+
+    // ========== 增强版：智能简化子过程描述（不超过15个字）==========
+    // 核心思路：从冗长描述中提取核心业务关键词，而非简单截断
+    const simplifySubProcessDesc = (desc) => {
+      if (!desc) return desc;
+
+      // 第一步：移除常见的冗余前缀和后缀
+      let cleaned = desc
+        .replace(/请求[-·：:]/g, '')  // 移除 "请求-"、"请求·" 等
+        .replace(/[-·：:]请求/g, '请求')  // 保留末尾的"请求"
+        .replace(/输入[^\u4e00-\u9fa5]*/g, '')  // 移除 "输入xxx"
+        .replace(/从.*?中(?=读取|获取|查询)/g, '')  // 移除 "从xxx中"
+        .replace(/向.*?(?=写入|保存|更新)/g, '')  // 移除 "向xxx"
+        .replace(/低空保障参数自动化/g, '低空保障')  // 缩短特定长词
+        .replace(/任务运行日志操作/g, '任务日志')  // 缩短特定长词
+        .replace(/自动化任务/g, '任务')  // 缩短
+        .replace(/配置表/g, '配置')  // 缩短
+        .replace(/派单任务管理表/g, '派单管理')  // 缩短
+        .trim();
+
+      // 如果清理后已经足够短，直接返回
+      if (cleaned.length <= 15) return cleaned;
+
+      // 第二步：提取关键动词
+      const actionVerbs = ['接收', '读取', '获取', '查询', '写入', '保存', '更新', '删除', '返回', '呈现', '输出', '生成', '触发', '调用', '记录', '处理'];
       let action = '';
       for (const verb of actionVerbs) {
-        if (desc.includes(verb)) {
+        if (cleaned.includes(verb)) {
           action = verb;
           break;
         }
       }
 
+      // 第三步：智能提取核心业务对象（2-8个字）
       if (action) {
-        const idx = desc.indexOf(action);
-        const afterAction = desc.slice(idx + action.length);
-        // 提取对象关键词（2-6个字）
-        const match = afterAction.match(/[\u4e00-\u9fa5]{2,6}/);
-        if (match) {
-          return action + match[0] + (afterAction.includes('数据') ? '数据' : afterAction.includes('结果') ? '结果' : afterAction.includes('信息') ? '信息' : '');
+        const idx = cleaned.indexOf(action);
+        const afterAction = cleaned.slice(idx + action.length);
+
+        // 尝试提取结构化的业务对象
+        // 优先匹配模式：核心名词（2-6字）+ 可选后缀（数据/结果/信息/请求/响应）
+        const patterns = [
+          /([\u4e00-\u9fa5]{2,6})(数据|结果|信息|请求|响应|日志|配置|任务|记录)/,
+          /([\u4e00-\u9fa5]{2,8})/
+        ];
+
+        for (const pattern of patterns) {
+          const match = afterAction.match(pattern);
+          if (match) {
+            let core = match[1];
+            let suffix = match[2] || '';
+
+            // 如果核心词太长，尝试进一步精简
+            if (core.length > 6) {
+              // 提取最后4-6个有意义的字作为核心
+              core = core.slice(-6);
+            }
+
+            const result = action + core + suffix;
+            return result.slice(0, 15);
+          }
         }
       }
 
-      // 直接截断
-      return desc.slice(0, 15);
+      // 第四步：兜底 - 智能截断，保留开头动词和结尾名词
+      // 检测开头的动词
+      let prefix = '';
+      for (const verb of actionVerbs) {
+        if (cleaned.startsWith(verb)) {
+          prefix = verb;
+          break;
+        }
+      }
+
+      // 检测结尾的名词
+      const suffixes = ['数据', '结果', '信息', '请求', '响应', '日志', '配置', '任务', '记录', '表'];
+      let suffixWord = '';
+      for (const suf of suffixes) {
+        if (cleaned.endsWith(suf)) {
+          suffixWord = suf;
+          break;
+        }
+      }
+
+      if (prefix && suffixWord) {
+        // 提取中间的核心内容
+        const middle = cleaned.slice(prefix.length, cleaned.length - suffixWord.length);
+        // 取中间内容的后6个字（通常更有业务含义）
+        const coreMiddle = middle.length > 6 ? middle.slice(-6) : middle;
+        return (prefix + coreMiddle + suffixWord).slice(0, 15);
+      }
+
+      // 最终兜底：直接截断
+      return cleaned.slice(0, 15);
     };
 
     // 清洗数据属性（英文转中文、格式规范化）
@@ -1885,10 +2044,35 @@ ${functionProcessList}
             currentTriggerEvent = normalized.trigger;
           }
 
+
           // 清理和规范化各字段
           subProcessDesc = sanitizeText(subProcessDesc);
-          subProcessDesc = simplifySubProcessDesc(subProcessDesc);
+
+          // 【关键修复】验证子过程描述格式，如果无效则自动修正
+          if (isInvalidSubProcessDesc(subProcessDesc)) {
+            const originalDesc = subProcessDesc;
+            subProcessDesc = regenerateSubProcessDesc(originalDesc, currentFunctionalProcess, dataMovementType);
+            console.log(`🔧 修正子过程描述: "${originalDesc}" → "${subProcessDesc}"`);
+          } else {
+            subProcessDesc = simplifySubProcessDesc(subProcessDesc);
+          }
+
           dataGroup = sanitizeText(dataGroup);
+
+          // 【关键修复】优化数据组名称：移除冗余动词前缀，保持名词性
+          const cleanDataGroupName = (name) => {
+            if (!name) return name;
+            const verbs = ['查询', '创建', '删除', '修改', '编辑', '导出', '导入', '统计', '配置', '处理', '执行', '新增', '更新', '生成', '返回', '获取', '同步', '汇总', '查看'];
+            let cleaned = name;
+            for (const verb of verbs) {
+              if (cleaned.startsWith(verb)) {
+                cleaned = cleaned.replace(verb, '');
+              }
+            }
+            return cleaned.replace(/^[·：:、 ]+/, '').trim() || name;
+          };
+          dataGroup = cleanDataGroupName(dataGroup);
+
           dataAttributes = sanitizeText(dataAttributes);
           dataAttributes = cleanDataAttributes(dataAttributes);
 
@@ -1897,9 +2081,21 @@ ${functionProcessList}
             dataGroup = `${currentFunctionalProcess.slice(0, 6)}·${subProcessDesc.slice(0, 4)}数据`;
           }
 
-          // 补全缺失的数据属性
-          if (!dataAttributes && currentFunctionalProcess) {
-            dataAttributes = `${currentFunctionalProcess.slice(0, 4)}ID、操作时间、状态标识`;
+          // 【关键修复】数据属性智能补全：如果属性少于3个，或与数据组高度重合（AI混淆），执行智能扩展
+          const attrFields = (dataAttributes || '').split(/[、,，]/).filter(f => f.trim().length >= 1);
+          const groupStr = (dataGroup || '').toLowerCase().trim();
+          const attrStr = (dataAttributes || '').toLowerCase().trim();
+
+          if (!dataAttributes || attrFields.length < 3 || (groupStr && attrStr && (groupStr === attrStr || groupStr.includes(attrStr) || attrStr.includes(groupStr)))) {
+            console.log(`🔍 识别到属性过少或内容可能错误 (Count: ${attrFields.length}, Val: "${dataAttributes}")，开始智能补全...`);
+            dataAttributes = await generateUniqueAttrString(
+              dataAttributes || '',
+              subProcessDesc,
+              currentFunctionalProcess,
+              [],
+              dataGroup,
+              0
+            );
           }
 
           tableData.push({
@@ -1939,6 +2135,47 @@ ${functionProcessList}
       console.log('🔍 开始调用 performFinalDeduplication 函数...');
       tableData = await performFinalDeduplication(tableData);
       console.log(`✓ 最终去重后: ${tableData.length} 条`);
+
+      // 【新增】最终子过程描述格式验证（最后一道防线）
+      console.log('\n⏳ 步骤3.5：最终子过程描述格式验证...');
+      let fixedCount = 0;
+      tableData = tableData.map(row => {
+        // 再次验证子过程描述格式
+        const desc = row.subProcessDesc || '';
+        const hasMultipleSeparators = (desc.match(/[、,，]/g) || []).length >= 2;
+        const lacksValidVerb = !['接收', '读取', '获取', '查询', '写入', '保存', '更新', '删除', '返回', '输出', '生成', '记录', '处理'].some(v => desc.includes(v));
+
+        if (hasMultipleSeparators || (lacksValidVerb && hasMultipleSeparators)) {
+          // 获取功能过程名称
+          const processName = row.functionalProcess || row._parentProcess || '';
+          const moveType = row.dataMovementType || '';
+
+          // 提取业务关键词
+          let businessKeyword = processName.replace(/^(查询|创建|删除|修改|编辑|导出|导入|统计|配置|处理|执行|启用|禁用|新增|更新|保存|读取|获取)/g, '').trim();
+          if (businessKeyword.length < 2) businessKeyword = processName.slice(0, 6) || '业务';
+          businessKeyword = businessKeyword.slice(0, 8);
+
+          // 生成正确格式的子过程描述
+          let newDesc = '';
+          switch (moveType.toUpperCase()) {
+            case 'E': newDesc = `接收${businessKeyword}请求`; break;
+            case 'R': newDesc = `读取${businessKeyword}数据`; break;
+            case 'W': newDesc = `记录${businessKeyword}结果`; break;
+            case 'X': newDesc = `返回${businessKeyword}响应`; break;
+            default: newDesc = `处理${businessKeyword}数据`;
+          }
+
+          console.log(`🔧 最终修正: "${desc}" → "${newDesc}"`);
+          fixedCount++;
+          return { ...row, subProcessDesc: newDesc };
+        }
+        return row;
+      });
+      if (fixedCount > 0) {
+        console.log(`✓ 最终格式验证修正了 ${fixedCount} 条子过程描述`);
+      } else {
+        console.log(`✓ 所有子过程描述格式均正确`);
+      }
 
       // 移除内部字段
       console.log('\n⏳ 步骤4：清理内部字段...');
@@ -2652,60 +2889,349 @@ async function performFinalDeduplication(tableData) {
     return '';
   };
 
-  // ========== 辅助函数：为属性添加差异化字段 ==========
+  // ========== 辅助函数：为属性添加差异化字段（增强版：先瘦身后添加）==========
   const addDifferentiatingFields = (attrs, subProcessDesc, functionalProcess, dataMovementType, existingAttrsSet) => {
+
+    // ===== 新增：数据属性智能瘦身函数（修复版：更温和的瘦身策略 + 更彻底的动词移除）=====
+    // 核心思路：只移除真正冗余的词，同时彻底移除动词前缀，确保保留足够的业务信息
+    const slimDownAttributes = (fieldName, functionalProcess, dataMovementType) => {
+      if (!fieldName || fieldName.length <= 4) return fieldName; // 已经很短了，保留
+
+      // 保护机制：如果字段名太短，不瘦身（避免过度精简）
+      const MIN_SAFE_LENGTH = 3; // 降低到3个字（因为很多名词本身就是3-4字）
+
+      // 0. 【新增】首先移除所有动词前缀（这是最关键的修复）
+      const actionVerbs = [
+        '编辑', '修改', '更新', '删除', '创建', '新增', '添加', '移除', '设置',
+        '配置', '调整', '变更', '录入', '填写', '输入', '选择', '指定',
+        '查询', '查看', '检索', '搜索', '浏览', '读取', '获取', '提取',
+        '导出', '导入', '上传', '下载', '发送', '接收', '推送',
+        '执行', '处理', '操作', '启动', '关闭', '启用', '禁用', '激活',
+        '审核', '审批', '确认', '验证', '校验', '检测', '监控', '分析',
+        '计算', '统计', '汇总', '聚合', '整合', '合并', '拆分'
+      ];
+
+      let cleanedFieldName = fieldName;
+      for (const verb of actionVerbs) {
+        // 只移除开头的动词
+        if (cleanedFieldName.startsWith(verb)) {
+          cleanedFieldName = cleanedFieldName.slice(verb.length);
+          console.log(`  → 移除动词前缀: "${fieldName}" -> "${cleanedFieldName}"`);
+          break; // 只移除一次
+        }
+      }
+
+      // 如果移除动词后变得太短，返回原值但记录警告
+      if (cleanedFieldName.length < 2) {
+        console.log(`  ⚠️ 动词移除后过短: "${fieldName}" (移除后: "${cleanedFieldName}")，保留原值但可能有问题`);
+        return fieldName;
+      }
+
+      // 1. 提取功能过程中的核心场景关键词
+      const extractSceneKeywords = (process) => {
+        const scenePatterns = [
+          /(华为|中兴|爱立信|诺基亚|大唐)/,  // 厂商
+          /(小区|基站|用户|网络|设备|站点|区域|地市|县)/,  // 网络对象
+          /(质差|优化|告警|故障|投诉|工单|任务|健康度)/,  // 场景
+          /(评估|评分|指标|统计|汇总|报表|日报|周报|月报)/,  // 业务类型
+        ];
+
+        let keywords = [];
+        for (const pattern of scenePatterns) {
+          const match = process.match(pattern);
+          if (match) keywords.push(match[1]);
+        }
+        return keywords.slice(0, 2).join(''); // 最多保留2个关键词
+      };
+
+      const sceneKeyword = extractSceneKeywords(functionalProcess);
+
+      // 使用清理后的字段名继续处理
+      fieldName = cleanedFieldName;
+
+      // 2. 重新定义冗余后缀词（大幅缩减，只保留真正冗余的）
+      // !!! 关键修复：移除"参数"、"配置"、"设置"等可能包含业务信息的词
+      const redundantSuffixes = [
+        '数据', '信息', '内容', '详情', '记录',  // 只保留最常见的5个冗余词
+      ];
+
+      // 3. 定义必要的核心词（这些词应该保留）
+      const coreWords = [
+        '标识', 'ID', '编号', '代码', '名称', '类型', '状态', '等级',
+        '时间', '日期', '位置', '坐标', '地址', '区域',
+        '数量', '数值', '比率', '百分比', '阈值', '门限',
+        '版本', '序号', '索引', '键', '码',
+        '参数', '配置', '设置', '属性'  // 新增：这些词也是核心业务词
+      ];
+
+      // 4. 保护性关键词：如果字段名只包含这些词，绝对不精简
+      const protectedKeywords = [
+        '任务ID', '任务名称', '任务分类', '任务类型', '任务状态',
+        '地市', '状态', '创建时间', '更新时间',
+        '操作人', '操作时间', '操作类型',
+        '请求参数', '请求时间', '响应结果', '返回状态',
+        '查询条件', '过滤条件', '排序规则',
+        '数据源', '数据类型', '数据值'
+      ];
+
+      // 检查是否是保护关键词
+      if (protectedKeywords.some(keyword => fieldName.includes(keyword))) {
+        return fieldName; // 保护关键词，不瘦身
+      }
+
+      // 4. 开始瘦身（更保守的策略）
+      let slimmedField = fieldName;
+      let hasSlimmed = false; // 标记是否已经瘦身过
+
+      // 4.1 只在字段名过长（>10字）时才考虑移除冗余后缀
+      if (slimmedField.length > 10) {
+        for (const suffix of redundantSuffixes) {
+          // 更严格的条件：只移除末尾的冗余词，且确保剩余部分足够长
+          if (slimmedField.endsWith(suffix) && slimmedField.length > suffix.length + MIN_SAFE_LENGTH) {
+            const withoutSuffix = slimmedField.slice(0, -suffix.length);
+
+            // 检查剩余部分是否包含核心词或场景关键词
+            const hasCoreWord = coreWords.some(core => withoutSuffix.includes(core));
+            const hasSceneKeyword = sceneKeyword && withoutSuffix.includes(sceneKeyword);
+
+            // 只有在确保有足够信息的情况下才移除
+            if ((hasCoreWord || hasSceneKeyword) && withoutSuffix.length >= MIN_SAFE_LENGTH) {
+              slimmedField = withoutSuffix;
+              hasSlimmed = true;
+              break; // 只移除一次，避免过度精简
+            }
+          }
+        }
+      }
+
+      // 4.2 特殊处理：如果字段名很长（>12字）且包含重复的操作动词
+      if (slimmedField.length > 12 && !hasSlimmed) {
+        // 只移除明显的重复描述词（操作动词）
+        const middleRedundant = ['查询', '导出', '统计', '分析'];
+        for (const word of middleRedundant) {
+          // 只有当字段名中该词出现在中间位置时才移除
+          const wordIndex = slimmedField.indexOf(word);
+          if (wordIndex > 2 && wordIndex < slimmedField.length - 3 && slimmedField.length > 10) {
+            const withoutWord = slimmedField.replace(word, '');
+            if (withoutWord.length >= MIN_SAFE_LENGTH) {
+              slimmedField = withoutWord;
+              break; // 只移除一次
+            }
+          }
+        }
+      }
+
+      // 4.3 最终长度控制（宽松标准：允许6-12字）
+      // 只有在非常长的情况下才强制截断
+      if (slimmedField.length > 12) {
+        // 保留前缀关键词 + 核心词
+        const hasCoreAtEnd = coreWords.some(core => slimmedField.endsWith(core));
+        if (hasCoreAtEnd) {
+          // 保留核心词在末尾
+          const coreWordAtEnd = coreWords.find(core => slimmedField.endsWith(core));
+          const targetLength = 12;
+          const prefix = slimmedField.slice(0, targetLength - coreWordAtEnd.length);
+          slimmedField = prefix + coreWordAtEnd;
+        } else {
+          // 没有核心词在末尾，保守截取前12字
+          slimmedField = slimmedField.slice(0, 12);
+        }
+      }
+
+      // 最终保护：确保瘦身后的字段不会太短
+      if (slimmedField.length < 3) {
+        return fieldName; // 太短了，返回原值
+      }
+
+      return slimmedField || fieldName; // 如果瘦身失败，返回原值
+    };
+
+    // ===== 步骤1：对已有字段进行瘦身 =====
     let fieldsArray = attrs.split(/[、,，|]/).map(f => f.trim()).filter(f => f.length >= 2);
 
-    // 1. 从功能过程中提取更具辨识度的业务词（增加长度和深度）
-    const extractDeepBusiness = (text) => {
-      if (!text) return '';
-      const verbs = ['查询', '创建', '删除', '修改', '导出', '导入', '统计', '分析', '配置', '设置', '获取', '更新', '生成', '汇总', '计算', '评估', '审核', '整合', '健康度', '评估表', '详情表', '日表'];
-      let result = text;
-      for (const v of verbs) {
-        result = result.replace(new RegExp(v, 'g'), '');
+    // 瘦身每个字段
+    fieldsArray = fieldsArray.map(field => slimDownAttributes(field, functionalProcess, dataMovementType));
+
+    // 去重（瘦身后可能产生重复）
+    fieldsArray = Array.from(new Set(fieldsArray));
+
+    // ===== 步骤1.5：强制差异化检查（防止瘦身后字段过于相似）=====
+    // 检查瘦身后的字段是否与全局已使用的字段高度相似
+    const minFieldLength = 4; // 字段最短长度
+    fieldsArray = fieldsArray.map(field => {
+      const fieldLower = field.toLowerCase();
+
+      // 检查是否已被全局使用（完全相同）
+      if (existingAttrsSet.has(fieldLower)) {
+        console.log(`⚠️ 数据属性瘦身后重复: "${field}"，强制差异化...`);
+
+        // 提取业务特征词用于差异化（修复版：提取真正的业务关键词）
+        const extractBusinessFeature = (process, moveType) => {
+          if (!process) return '';
+
+          // 优先使用厂商特征
+          const vendorMatch = process.match(/(华为|中兴|爱立信|诺基亚)/);
+          if (vendorMatch) return vendorMatch[1];
+
+          // 提取业务领域关键词（如"低空保障"、"参数配置"等）
+          const domainMatch = process.match(/(低空保障|低空|保障|参数|配置|自动化|任务|工单|告警|质差|优化|健康度|评估|统计|监控|管理|调度|执行|删除|创建|编辑|查看|启用|禁用|批量)/);
+          if (domainMatch) return domainMatch[1];
+
+          // 提取网络对象关键词
+          const objectMatch = process.match(/(小区|基站|用户|网络|设备|站点|区域|地市)/);
+          if (objectMatch) return objectMatch[1];
+
+          // 兜底：提取功能过程的核心词（移除动词后的前4个字）
+          const cleanedProcess = process
+            .replace(/查询|创建|删除|修改|导出|导入|统计|配置|处理|执行|启用|禁用|编辑|查看|返回|读取|保存|生成|输出|接收/g, '')
+            .trim();
+
+          if (cleanedProcess.length >= 2) {
+            return cleanedProcess.slice(0, 4); // 取前4个字作为业务特征
+          }
+
+          // 最终兜底：直接取功能过程的前4个字（不再使用单字"入/取/存/出"）
+          return process.slice(0, 4);
+        };
+
+        const businessFeature = extractBusinessFeature(functionalProcess, dataMovementType);
+
+        // 智能插入特征词（而不是简单追加）
+        if (field.length > 6) {
+          // 在中间插入特征词
+          const mid = Math.floor(field.length / 2);
+          field = field.slice(0, mid) + businessFeature + field.slice(mid);
+        } else {
+          // 短字段，直接追加
+          field = businessFeature + field;
+        }
+
+        // 限制最大长度
+        field = field.slice(0, 10);
+
+        console.log(`  → 差异化后: "${field}"`);
       }
-      return result.trim().slice(0, 10) || text.slice(0, 6);
+
+      // 确保字段不会太短
+      if (field.length < minFieldLength && functionalProcess) {
+        const prefix = functionalProcess.slice(0, minFieldLength - field.length);
+        field = prefix + field;
+      }
+
+      return field;
+    });
+
+    // ===== 步骤2：从功能过程中提取业务关键词，用于生成差异化字段（修复版）=====
+    const extractBusinessContext = (text) => {
+      if (!text) return { core: '', vendor: '', object: '', scene: '', domain: '' };
+
+      // 提取厂商
+      const vendorMatch = text.match(/(华为|中兴|爱立信|诺基亚|大唐)/);
+      const vendor = vendorMatch ? vendorMatch[1] : '';
+
+      // 提取业务领域（新增：如"低空保障"、"参数配置"等）
+      const domainMatch = text.match(/(低空保障|低空|保障|自动化|参数配置|任务管理|工单管理|设备管理|告警管理|质差分析|健康度|监控中心)/);
+      const domain = domainMatch ? domainMatch[1] : '';
+
+      // 提取网络对象
+      const objectMatch = text.match(/(小区|基站|用户|网络|设备|站点|区域|地市)/);
+      const object = objectMatch ? objectMatch[1] : '';
+
+      // 提取场景
+      const sceneMatch = text.match(/(质差|优化|告警|故障|投诉|工单|任务|健康度|评估|统计|汇总|编辑|删除|创建|查看|启用|禁用|执行|批量)/);
+      const scene = sceneMatch ? sceneMatch[1] : '';
+
+      // 提取核心词（移除动词后的剩余，但保留更多业务信息）
+      const verbs = ['查询', '创建', '删除', '修改', '导出', '导入', '统计', '分析', '配置', '设置', '获取', '更新', '生成', '汇总', '计算', '评估', '审核', '整合', '编辑', '查看', '启用', '禁用', '执行', '批量', '立即'];
+      let core = text;
+      for (const v of verbs) {
+        core = core.replace(new RegExp(v, 'g'), '');
+      }
+      // 只移除最冗余的词，保留"数据"、"参数"等可能有业务含义的词
+      core = core.replace(/管理|系统|平台|功能|模块/g, '').trim().slice(0, 8);
+
+      return { core, vendor, object, scene, domain };
     };
 
-    const deepKeyword = extractDeepBusiness(functionalProcess);
-    // 从功能过程中提取特征标识
-    const getFeaturePrefix = (text) => {
-      if (text.includes('详情')) return '详情';
-      if (text.includes('统计')) return '统计';
-      if (text.includes('汇总')) return '汇总';
-      if (text.includes('评分')) return '评分';
-      if (text.includes('评估')) return '评估';
-      if (text.includes('华为')) return '华为';
-      if (text.includes('中兴')) return '中兴';
-      return '';
-    };
-    const feature = getFeaturePrefix(functionalProcess);
-    const uniquePrefix = feature ? `${deepKeyword}${feature}` : deepKeyword;
+    const bizContext = extractBusinessContext(functionalProcess);
+    // 构建业务前缀：优先使用业务领域 + 场景，其次是厂商 + 对象
+    const businessPrefix =
+      (bizContext.domain ? bizContext.domain.slice(0, 4) : '') +
+      (bizContext.scene ? bizContext.scene.slice(0, 2) : '') ||
+      `${bizContext.vendor}${bizContext.scene}${bizContext.object}`.slice(0, 8) ||
+      bizContext.core.slice(0, 6) ||
+      functionalProcess.slice(0, 4);
 
-    // 2. 增强差异化字段池
+    // ===== 步骤3：优化差异化字段池（业务化而非技术化，且移除动词）=====
     const differentiatingFieldPools = {
-      'E': [`${uniquePrefix}请求标识`, `${uniquePrefix}操作流水`, '会话追踪ID', '客户端版本号', '场景上下文', '业务优先级', '验证指纹'],
-      'R': [`${uniquePrefix}数据版本`, `${uniquePrefix}源标识`, '缓存校验状态', '时效性标签', '关联实体数', '过滤掩码', '同步序列'],
-      'W': [`${uniquePrefix}事务码`, `${uniquePrefix}记录ID`, '写入分区号', '幂等校验键', '一致性指纹', '变更轨迹ID', '持久化批次'],
-      'X': [`${uniquePrefix}响应序列`, `${uniquePrefix}处理回执`, '压缩标识位', '分页游标', '后续指令引导', '刷新凭证', '异步任务令牌']
+      // E（入口）：请求相关字段（纯名词）
+      'E': [
+        `${businessPrefix}请求ID`,
+        `${businessPrefix}批次号`,
+        `${businessPrefix}会话标识`,
+        '用户标识',
+        '时间戳',
+        '来源渠道',
+        '业务类型码',
+        '优先级'
+      ],
+      // R（读取）：配置和规则相关字段（纯名词）
+      'R': [
+        `${businessPrefix}配置版本`,
+        `${businessPrefix}规则标识`,
+        `${businessPrefix}数据源`,
+        '时间范围',
+        '条件组合',
+        '过滤规则',
+        '关联对象数',
+        '数据范围'
+      ],
+      // W（写入）：记录和日志相关字段（纯名词）
+      'W': [
+        `${businessPrefix}记录ID`,
+        `${businessPrefix}流水号`,
+        `${businessPrefix}批次号`,
+        '时间戳',
+        '人员标识',
+        '变更类型',
+        '持久化标识',
+        '分区键'
+      ],
+      // X（出口）：响应和结果相关字段（纯名词）
+      'X': [
+        `${businessPrefix}响应ID`,
+        `${businessPrefix}结果集`,
+        `${businessPrefix}序号`,
+        '状态码',
+        '结果数量',
+        '耗时毫秒',
+        '游标位置',
+        '任务令牌'
+      ]
     };
 
+    // 通用差异化字段（更业务化）
     const generalDifferentiatingFields = [
-      `${uniquePrefix}追踪码`, `${uniquePrefix}序号`, '逻辑节点标识', '协议版本',
-      '环境指纹', '审计流水号', '处理耗时毫秒', '状态验证码', '操作人鉴权码'
+      `${businessPrefix}追踪码`,
+      `${businessPrefix}流水号`,
+      '操作标识',
+      '处理序号',
+      '业务标签',
+      '状态码',
+      '时间戳'
     ];
 
     const moveType = dataMovementType || detectMoveType(subProcessDesc);
     let candidatePool = [...(differentiatingFieldPools[moveType] || []), ...generalDifferentiatingFields];
 
-    // 按照“业务相关度”重排
+    // ===== 步骤4：按业务相关度排序候选字段 =====
     candidatePool = candidatePool.sort((a, b) => {
-      const aWeight = a.includes(uniquePrefix) ? 1 : 0;
-      const bWeight = b.includes(uniquePrefix) ? 1 : 0;
+      const aWeight = a.includes(businessPrefix) ? 1 : 0;
+      const bWeight = b.includes(businessPrefix) ? 1 : 0;
       return bWeight - aWeight;
     });
 
-    // 4. 尝试添加差异化字段
+    // ===== 步骤5：尝试添加差异化字段（最多2个）=====
     let addedCount = 0;
     const shuffled = candidatePool.sort(() => Math.random() - 0.5);
     for (const field of shuffled) {
@@ -2722,16 +3248,16 @@ async function performFinalDeduplication(tableData) {
       }
     }
 
-    // 5. 🚨 兜底机制 - 使用业务相关字段而非校验码
+    // ===== 步骤6：兜底机制（更简洁的业务字段）=====
     if (addedCount === 0) {
-      // 根据数据移动类型选择合适的兜底字段
+      // 根据数据移动类型选择合适的兜底字段（精简版）
       const fallbackFieldsByType = {
-        'E': [`${uniquePrefix}请求追踪码`, `${uniquePrefix}会话标识`, `${uniquePrefix}操作批次`],
-        'R': [`${uniquePrefix}数据快照版本`, `${uniquePrefix}读取时间戳`, `${uniquePrefix}缓存标识`],
-        'W': [`${uniquePrefix}写入事务号`, `${uniquePrefix}持久化序列`, `${uniquePrefix}变更批次`],
-        'X': [`${uniquePrefix}响应追踪码`, `${uniquePrefix}输出序列号`, `${uniquePrefix}返回批次`]
+        'E': [`${businessPrefix}请求码`, `${businessPrefix}会话ID`, `${businessPrefix}批次号`],
+        'R': [`${businessPrefix}配置版本`, `${businessPrefix}读取时间`, `${businessPrefix}数据源`],
+        'W': [`${businessPrefix}写入序号`, `${businessPrefix}操作流水`, `${businessPrefix}变更批次`],
+        'X': [`${businessPrefix}响应码`, `${businessPrefix}输出序号`, `${businessPrefix}返回批次`]
       };
-      const fallbackPool = fallbackFieldsByType[moveType] || [`${uniquePrefix}业务追踪码`, `${uniquePrefix}处理序列`, `${uniquePrefix}操作批次`];
+      const fallbackPool = fallbackFieldsByType[moveType] || [`${businessPrefix}追踪码`, `${businessPrefix}处理序号`, `${businessPrefix}操作批次`];
 
       for (const fallbackField of fallbackPool) {
         const fallbackLower = fallbackField.toLowerCase();
@@ -2743,6 +3269,7 @@ async function performFinalDeduplication(tableData) {
       }
     }
 
+    // ===== 步骤7：最终清理和返回 =====
     const finalFields = fieldsArray.filter((v, i, a) => a.indexOf(v) === i);
     return finalFields.slice(0, 8).join('、');
   };
@@ -2772,20 +3299,89 @@ async function performFinalDeduplication(tableData) {
   tableData = removeDuplicateFunctionalProcesses(tableData);
   console.log(`功能过程去重后剩余 ${tableData.length} 条数据`);
 
-  // ========== 第一步：子过程描述去重（智能语义化去重）==========
+  // ========== 第一步：子过程描述去重（增强版：瘦身后强制差异化）==========
   const seenSubProcessDescs = new Map();
-  tableData = tableData.map(row => {
+  const subProcessCounters = new Map(); // 记录每种描述出现的次数
+
+  tableData = tableData.map((row, index) => {
     const key = (row.subProcessDesc || '').toLowerCase().trim();
+
     if (key && seenSubProcessDescs.has(key)) {
+      console.log(`⚠️ 检测到重复子过程描述: "${row.subProcessDesc}"`);
+
       const funcProcess = cleanNumberSuffix(row._parentProcess || row.functionalProcess || '');
+      const dataMovementType = row.dataMovementType || '';
+
+      // 尝试1：重新生成（可能已经瘦身过）
       let newDesc = generateSemanticSubProcessDesc(row.subProcessDesc, funcProcess);
       newDesc = cleanNumberSuffix(newDesc);
+
+      // 检查重新生成的描述是否还是重复
+      const newKey = newDesc.toLowerCase().trim();
+      if (seenSubProcessDescs.has(newKey)) {
+        console.log(`  → 重新生成仍重复，尝试强制差异化...`);
+
+        // 尝试2：添加业务差异化后缀（基于ERWX类型）
+        const typeSuffixes = {
+          'E': ['入口', '接收', '触发'],
+          'R': ['查阅', '提取', '检索'],
+          'W': ['存储', '保存', '登记'],
+          'X': ['输出', '反馈', '应答']
+        };
+        const suffixList = typeSuffixes[dataMovementType] || ['操作', '处理', '执行'];
+
+        // 提取功能过程的核心特征词（2-4字）
+        const extractFeature = (process) => {
+          const features = process.match(/(华为|中兴|爱立信|质差|优化|告警|健康度|评估|统计|汇总|日表|周表|月表)/);
+          return features ? features[1] : process.slice(0, 4);
+        };
+        const feature = extractFeature(funcProcess);
+
+        // 组合：原描述 + 特征词 + 类型后缀
+        for (const suffix of suffixList) {
+          const candidateDesc = `${newDesc.slice(0, 12)}${feature}${suffix}`.slice(0, 15);
+          const candidateKey = candidateDesc.toLowerCase().trim();
+
+          if (!seenSubProcessDescs.has(candidateKey)) {
+            newDesc = candidateDesc;
+            console.log(`  → 强制差异化成功: "${row.subProcessDesc}" -> "${newDesc}"`);
+            break;
+          }
+        }
+
+        // 尝试3：如果还是重复，添加功能过程核心关键词
+        if (seenSubProcessDescs.has(newDesc.toLowerCase().trim())) {
+          console.log(`  → 添加功能过程关键词...`);
+          const coreKeyword = funcProcess.replace(/查询|创建|删除|修改|导出|导入|统计|配置/g, '').slice(0, 6);
+          newDesc = `${newDesc.slice(0, 10)}${coreKeyword}`.slice(0, 15);
+        }
+
+        // 尝试4：兜底机制 - 添加计数序号（极少情况）
+        const finalKey = newDesc.toLowerCase().trim();
+        if (seenSubProcessDescs.has(finalKey)) {
+          console.log(`  → 使用计数器兜底...`);
+          const counter = (subProcessCounters.get(finalKey) || 1) + 1;
+          subProcessCounters.set(finalKey, counter);
+
+          // 添加序号，但用业务化的方式（不是简单的1、2、3）
+          const counterSuffixes = ['二次', '备选', '辅助', '补充', '扩展'];
+          const counterSuffix = counterSuffixes[Math.min(counter - 2, counterSuffixes.length - 1)];
+          newDesc = `${newDesc.slice(0, 13)}${counterSuffix}`.slice(0, 15);
+
+          console.log(`  → 兜底差异化: "${row.subProcessDesc}" -> "${newDesc}"`);
+        }
+      }
+
       if (newDesc !== row.subProcessDesc) {
-        console.log(`子过程描述语义化去重: "${row.subProcessDesc}" -> "${newDesc}"`);
+        console.log(`✓ 子过程描述去重成功: "${row.subProcessDesc}" -> "${newDesc}"`);
         row = { ...row, subProcessDesc: newDesc };
       }
     }
-    seenSubProcessDescs.set((row.subProcessDesc || '').toLowerCase().trim(), true);
+
+    // 记录已使用的描述
+    const finalKey = (row.subProcessDesc || '').toLowerCase().trim();
+    seenSubProcessDescs.set(finalKey, { index, funcProcess: row.functionalProcess });
+
     return row;
   });
 
@@ -2889,9 +3485,9 @@ async function performFinalDeduplication(tableData) {
         maxOverlapRate = overlapRate;
       }
 
-      // 降低阈值到0.15（15%），更积极地去重，确保数据属性充分差异化
+      // 【修复】提高阈值到0.5（50%），避免过度去重导致添加过多无意义的差异化字段
       // 注意：如果完全相同（100%），上面已经处理过了，这里会再次增强
-      if (overlapRate >= 0.15) {
+      if (overlapRate >= 0.5) {
         needsDifferentiation = true;
         console.log(`发现高重合度(${(overlapRate * 100).toFixed(0)}%): 行${i} "${row.dataAttributes?.slice(0, 30)}..." vs 已有行`);
         // 不要break，继续检查所有行，找到最大重合度
@@ -2964,38 +3560,47 @@ async function generateUniqueGroupName(originalName, subProcessDesc, functionalP
   const actionWord = keywords.action || '';
   const nounWord = keywords.noun || '';
 
-  // 尝试不同的组合策略（使用功能过程动词区分，不用序号）
+  // 【关键修复】优化去重策略：避免动词出现在数据组开头
   const strategies = [
-    () => processAction ? `${processAction}${originalName}` : null,
-    () => `${originalName}·${processAction || actionWord}${nounWord}`,
-    () => `${functionalProcess.slice(0, 6)}·${originalName}`,
-    () => `${actionWord}${originalName}·${nounWord}`,
-    () => `${originalName}·${functionalProcess.slice(0, 8)}`
+    () => `${originalName}·${nounWord || '详情'}`,
+    () => `${functionalProcess.replace(/查询|导出|新增|修改|删除/g, '').slice(0, 8)}·${originalName}`,
+    () => `${originalName}${nounWord || '表'}`,
+    () => `${originalName}·${actionWord}${nounWord || '数据'}`,
+    () => `${originalName}·模块${duplicateIndex + 1}`
   ];
 
   for (const strategy of strategies) {
     const candidate = strategy();
-    if (candidate && candidate.length > 2 && !existingNames.some(n => n.toLowerCase() === candidate.toLowerCase())) {
-      return candidate.slice(0, 25);
+    // 再次清理动词，确保万无一失
+    const cleanedCandidate = candidate ? candidate.replace(/^(查询|创建|删除|修改|导出|导入|统计|配置|新增|更新|生成|返回|获取)/, '').replace(/^[· ]+/, '') : null;
+
+    if (cleanedCandidate && cleanedCandidate.length > 2 && !existingNames.some(n => n.toLowerCase() === cleanedCandidate.toLowerCase())) {
+      return cleanedCandidate.slice(0, 25);
     }
   }
 
-  // 最后兜底：使用功能过程全名
-  return `${functionalProcess.slice(0, 10)}·${originalName}`.slice(0, 25);
+  // 最后兜底：使用名词化的功能过程名
+  return `${functionalProcess.replace(/查询|导出|新增|修改|删除/g, '').slice(0, 10)}·${originalName}`.slice(0, 25);
 }
 
 // 生成唯一的数据属性字符串 - 增强版：根据E/R/W/X类型和功能过程生成具体的数据属性
 async function generateUniqueAttrString(originalAttrs, subProcessDesc, functionalProcess, existingAttrs, dataGroup, duplicateIndex) {
-  // 将原有属性拆分成数组
-  let fieldsArray = originalAttrs.split(/[|,、，]/).map(f => f.trim()).filter(Boolean);
+  // 【关键修复】清理原有属性，如果原有属性看起来像个“数据组”名称（而不是列表），则丢弃它
+  let fieldsArray = (originalAttrs || '').split(/[|,、，]/).map(f => f.trim()).filter(Boolean);
+
+  // 如果只有一个字段且长度较长，或者包含“请求”、“相应”、“表”等字样，说明是AI混淆了数据组和属性
+  if (fieldsArray.length === 1 && (fieldsArray[0].length > 5 || /请求|响应|界面|模块|表|数据组/.test(fieldsArray[0]))) {
+    console.log(`⚠️ 检测到属性列混入数据组名称: "${fieldsArray[0]}"，清空重制`);
+    fieldsArray = [];
+  }
 
   // 从功能过程中提取业务关键词
   const extractBusinessKeywords = (process) => {
     if (!process) return '';
-    const genericWords = ['查询', '创建', '删除', '修改', '导出', '导入', '统计', '分析', '配置', '设置', '获取', '更新', '生成', '汇总', '计算', '评估', '审核', '审批'];
+    const genericWords = ['查询', '创建', '删除', '修改', '导出', '导入', '统计', '分析', '配置', '设置', '获取', '更新', '生成', '汇总', '计算', '评估', '审核', '审批', '同步', '派发', '反馈'];
     let keywords = process;
     for (const word of genericWords) {
-      keywords = keywords.replace(word, '');
+      keywords = keywords.replace(new RegExp(word, 'g'), '');
     }
     return keywords.trim().slice(0, 8) || process.slice(0, 6);
   };
@@ -3017,124 +3622,59 @@ async function generateUniqueAttrString(originalAttrs, subProcessDesc, functiona
   // 根据E/R/W/X类型生成不同的数据属性候选
   const erwxTemplates = {
     'E': [ // Entry - 输入型数据
-      `${businessKeyword}请求ID`, `${businessKeyword}查询条件`, '操作人标识', '请求时间', '用户权限',
-      '业务场景', '请求来源', '会话标识', '客户端类型', '操作批次号'
+      `${businessKeyword}请求ID`, `${businessKeyword}参数`, '操作标识', '请求时间', '用户令牌',
+      '业务场景', '过滤条件', '排序维度', '触发源标识'
     ],
     'R': [ // Read - 读取型数据
-      `${businessKeyword}ID`, `${businessKeyword}名称`, `${businessKeyword}编码`, '数据版本',
-      '读取时间', '数据来源表', '记录状态', '有效期', '创建人', '最后修改时间'
+      `${businessKeyword}ID`, `${businessKeyword}名称`, `${businessKeyword}类型`, '基本信息',
+      '所属地市', '更新频率', '生效状态', '源端标识', '读取批次号'
     ],
     'W': [ // Write - 写入型数据
-      `${businessKeyword}操作类型`, `${businessKeyword}处理结果`, '操作时间', '操作人',
-      '日志记录ID', '变更内容', '操作耗时', '执行状态', '备注信息', '审计追踪ID'
+      `${businessKeyword}执行结果`, '处理状态', '操作流水', '更新耗时',
+      '日志ID', '事务码', '持久化路径', '入库时间', '异常描述'
     ],
     'X': [ // Exit - 输出型数据
-      '响应状态码', `${businessKeyword}结果消息`, '处理耗时', '返回记录数', '分页信息',
-      '错误详情', '成功标识', '下一步提示', '操作编号', '响应时间戳'
+      '处理回执', `${businessKeyword}结果集`, '状态码', '结果总数', '分页游标',
+      '响应时间', '成功标记', '输出流水', '提示原文'
     ]
   };
 
   // 获取当前类型的候选字段
   const typeSpecificCandidates = erwxTemplates[dataMovementType] || [];
 
-  // 通用候选字段（当类型特定字段不足时使用）
+  // 通用候选字段
   const generalCandidates = [
-    `${businessKeyword}ID`, `${businessKeyword}名称`, `${businessKeyword}类型`,
-    `${businessKeyword}状态`, '创建时间', '更新时间', '操作人员', '数据版本',
-    '记录编号', '处理状态', '备注说明', '有效标识'
-  ].filter(f => f && f.length >= 2 && f.length <= 12);
+    `${businessKeyword}标识`, `${businessKeyword}编码`, `${businessKeyword}分类`,
+    `${businessKeyword}详情`, '创建时间', '更新时间', '操作人员'
+  ];
 
-  // 构建完整的候选列表（类型特定的在前）
+  // 构建完整的候选列表
   const allCandidates = [...new Set([...typeSpecificCandidates, ...generalCandidates])];
 
-  // 计算需要添加的字段数（确保至少有3-5个唯一字段）
-  const minUniqueFields = 3;
-  const targetFieldCount = Math.max(minUniqueFields, Math.min(6, fieldsArray.length + 2));
+  // 确保至少有 3-4 个属性
+  const targetCount = 4;
 
-  // 添加新的唯一字段
-  let addedCount = 0;
+  // 添加新字段
   for (const candidate of allCandidates) {
-    if (fieldsArray.length >= targetFieldCount) break;
-    if (addedCount >= 3) break; // 最多添加3个新字段
+    if (fieldsArray.length >= targetCount) break;
 
-    const normalizedCandidate = candidate.replace(/\s+/g, '');
-    const exists = fieldsArray.some(f => {
-      const normalizedField = f.replace(/\s+/g, '');
-      return normalizedField === normalizedCandidate ||
-        normalizedField.includes(normalizedCandidate) ||
-        normalizedCandidate.includes(normalizedField);
-    });
-
-    // 同时检查是否和已存在的属性列表重复
-    const existsInPrevious = existingAttrs.some(attr =>
-      attr.toLowerCase().includes(normalizedCandidate.toLowerCase())
-    );
-
-    if (!exists && !existsInPrevious) {
-      fieldsArray.push(candidate);
-      addedCount++;
-    }
+    const isDup = fieldsArray.some(f => f === candidate || f.includes(candidate) || candidate.includes(f));
+    if (!isDup) fieldsArray.push(candidate);
   }
 
-  // 🔥 关键修复：如果字段数量仍然不足（说明所有候选字段都已存在），强制添加唯一字段
-  if (fieldsArray.length < 3 || addedCount === 0) {
-    console.log(`  → 警告：常规去重无效，启用强制差异化模式`);
-
-    // 使用更强的差异化策略：功能过程前缀 + 随机差异化字段
-    const forcedFieldPool = [
-      `${businessKeyword}执行序列号`,
-      `${businessKeyword}处理轮次`,
-      `${businessKeyword}调用标识`,
-      `${businessKeyword}流程追踪码`,
-      `${businessKeyword}业务编号`,
-      `${businessKeyword}操作令牌`,
-      `${businessKeyword}事务标记`,
-      `${businessKeyword}会话追踪`,
-      `${businessKeyword}执行批次号`,
-      `${businessKeyword}处理流水`,
-      `${functionalProcess.slice(0, 4)}专属ID`,
-      `${functionalProcess.slice(0, 4)}标识符`,
-      `${functionalProcess.slice(0, 4)}序列码`,
-    ];
-
-    // 随机打乱顺序，避免每次添加相同的字段
-    const shuffled = forcedFieldPool.sort(() => Math.random() - 0.5);
-
-    let forcedAddCount = 0;
-    for (const field of shuffled) {
-      if (forcedAddCount >= 2) break; // 强制添加至少2个字段
-
-      // 检查是否已经在当前fieldsArray中
-      const alreadyInCurrent = fieldsArray.some(f =>
-        f.toLowerCase() === field.toLowerCase() ||
-        f.includes(field) ||
-        field.includes(f)
-      );
-
-      if (!alreadyInCurrent) {
-        fieldsArray.push(field);
-        forcedAddCount++;
-        console.log(`    → 强制添加差异化字段: "${field}"`);
-      }
+  // 兜底补齐：如果还不够，强制组合出 3 个
+  while (fieldsArray.length < 3) {
+    const fallback = [`${businessKeyword}ID`, `${businessKeyword}状态`, '记录时间'][fieldsArray.length];
+    if (fallback && !fieldsArray.includes(fallback)) {
+      fieldsArray.push(fallback);
+    } else {
+      fieldsArray.push(`业务字段${fieldsArray.length + 1}`);
     }
-
-    // 如果还是不够，使用带时间戳的唯一字段（最后兜底）
-    if (forcedAddCount === 0) {
-      const timestamp = Date.now().toString().slice(-6);
-      fieldsArray.push(`${businessKeyword}标识${timestamp}`);
-      console.log(`    → 兜底方案：添加时间戳字段`);
-    }
-  }
-
-  // 限制字段数量在3-8个之间
-  if (fieldsArray.length > 8) {
-    fieldsArray = fieldsArray.slice(0, 8);
   }
 
   // 去重并清理
   fieldsArray = [...new Set(fieldsArray)].filter(f => f && f.length >= 2);
-
-  return fieldsArray.join('、');
+  return fieldsArray.slice(0, 8).join('、');
 }
 
 // 从子过程描述中提取关键词
@@ -3165,96 +3705,156 @@ function extractKeywords(subProcessDesc = '') {
 // 增强：检测过于简单的描述，主动丰富业务内容
 // 例如："查询华为小区质差数据" 的子过程 "接收请求参数" -> "接收华为小区质差查询请求"
 // 例如："导出中兴小区指标报表" 的子过程 "读取数据" -> "读取中兴小区指标数据"
+// ========== 增强版：智能关键词提取 + 子过程描述生成（10-15字精准控制）==========
 function generateSemanticSubProcessDesc(originalDesc, functionalProcess) {
   if (!originalDesc || !functionalProcess) return originalDesc;
 
-  // 检测是否是过于简单的通用描述（需要丰富）
-  const tooSimplePatterns = [
-    /^接收.*?请求(参数)?$/,
-    /^接收.*?(?:整合|汇总|统计|评估|分析)?请求$/,
-    /^读取.*?数据$/,
-    /^读取(华为|中兴|爱立信|诺基亚)?数据$/,  // 厂商+数据
-    /^查询.*?数据$/,
-    /^保存.*?结果$/,
-    /^写入.*?结果$/,
-    /^写入整合结果$/,
-    /^记录.*?日志$/,
-    /^返回.*?结果$/,
-    /^返回.*?响应$/,
-    /^写入.*?记录$/,
-    /^获取.*?信息$/,
-    /^.{2,6}(数据|请求|结果|响应|信息|日志|记录)$/  // 3-7字的简短描述
-  ];
-  const isTooSimple = tooSimplePatterns.some(p => p.test(originalDesc)) || originalDesc.length < 12;
+  // ===== 步骤1：从功能过程中智能提取核心业务关键词（修复版）=====
+  const extractCoreKeywords = (process) => {
+    if (!process) return { keywords: '', action: '' };
 
-  // 从功能过程中提取动词和业务对象
-  const actionVerbs = ['查询', '创建', '删除', '修改', '更新', '导出', '导入', '新增', '编辑', '审批', '审核', '提交', '撤销', '启用', '禁用', '配置', '设置', '分配', '取消', '发布', '生成', '同步', '备份', '恢复', '验证', '确认', '搭建', '建立', '部署', '安装', '集成', '迁移', '初始化', '启动', '停止', '注册', '绑定', '解绑', '汇总', '统计', '分析', '计算', '评估'];
+    // 只移除真正冗余的修饰词（大幅缩减）
+    const redundantWords = [
+      '功能', '模块', '界面', '过程', '流程', '相关'  // 只保留最冗余的词
+    ];
 
-  let actionVerb = '';
-  let businessObject = functionalProcess;
+    // 提取核心动词
+    const actionVerbs = [
+      '查询', '创建', '删除', '修改', '更新', '导出', '导入', '新增',
+      '编辑', '审批', '审核', '提交', '撤销', '启用', '禁用', '配置',
+      '设置', '分配', '取消', '发布', '生成', '同步', '备份', '恢复',
+      '验证', '确认', '搭建', '建立', '部署', '安装', '集成', '迁移',
+      '初始化', '启动', '停止', '注册', '绑定', '解绑', '汇总', '统计',
+      '分析', '计算', '评估', '整合', '查看', '获取', '执行', '批量'
+    ];
 
-  for (const verb of actionVerbs) {
-    if (functionalProcess.includes(verb)) {
-      actionVerb = verb;
-      // 提取业务对象（去掉动词后的部分）
-      const verbIndex = functionalProcess.indexOf(verb);
-      const afterVerb = functionalProcess.slice(verbIndex + verb.length).trim();
-      const beforeVerb = functionalProcess.slice(0, verbIndex).trim();
-      // 优先使用动词前面的内容作为业务对象（如"华为小区用户数查询" -> "华为小区用户数"）
-      businessObject = beforeVerb || afterVerb || functionalProcess;
-      break;
+    let action = '';
+    let businessCore = process;
+
+    // 提取动词
+    for (const verb of actionVerbs) {
+      if (process.includes(verb)) {
+        action = verb;
+        // 分离动词前后的内容
+        const verbIndex = process.indexOf(verb);
+        const beforeVerb = process.slice(0, verbIndex);
+        const afterVerb = process.slice(verbIndex + verb.length);
+        // 业务核心 = 动词后的内容（优先）或动词前的内容
+        // 修复：优先取动词后的内容，因为中文习惯是"动词+宾语"
+        businessCore = afterVerb || beforeVerb;
+        break;
+      }
     }
-  }
 
-  // 如果没有找到动词，使用功能过程作为业务对象（去掉通用后缀）
-  if (!actionVerb) {
-    businessObject = functionalProcess
-      .replace(/数据$/, '')
-      .replace(/功能$/, '')
-      .replace(/处理$/, '')
-      .trim() || functionalProcess.slice(0, Math.min(10, functionalProcess.length));
-  }
+    // 温和地移除冗余词（只移除最冗余的几个）
+    for (const word of redundantWords) {
+      businessCore = businessCore.replace(new RegExp(word, 'g'), '');
+    }
 
-  // 确保业务对象不太长，但保留足够的业务信息
-  if (businessObject.length > 14) {
-    businessObject = businessObject.slice(0, 14);
-  }
+    // 清理多余的空格
+    businessCore = businessCore.trim();
 
-  // 子过程描述的动词前缀
-  const subProcessPrefixes = ['接收', '读取', '查询', '获取', '保存', '写入', '更新', '删除', '返回', '输出', '生成', '执行', '处理', '验证', '确认', '提交', '导出', '导入', '调用', '记录'];
+    // 如果业务核心太短，尝试使用完整的功能过程名称（移除动词）
+    if (businessCore.length < 4 && process.length > 4) {
+      let fullCore = process;
+      for (const verb of actionVerbs) {
+        fullCore = fullCore.replace(verb, '');
+      }
+      for (const word of redundantWords) {
+        fullCore = fullCore.replace(new RegExp(word, 'g'), '');
+      }
+      businessCore = fullCore.trim() || businessCore;
+    }
 
-  // 检查原描述是否已经包含业务上下文（避免重复添加）
-  const hasBusinessContext = originalDesc.includes(businessObject.slice(0, 4)) ||
-    (businessObject.length >= 4 && originalDesc.includes(businessObject));
+    // 限制关键词长度（扩大为8-12字，保留更多信息）
+    const finalKeywords = businessCore.slice(0, 12);
 
-  if (hasBusinessContext && !isTooSimple) {
+    return { keywords: finalKeywords, action };
+  };
+
+  // ===== 步骤2：检测子过程描述的类型（E/R/W/X）=====
+  const detectSubProcessType = (desc) => {
+    if (desc.includes('接收') || desc.includes('触发')) return 'E';
+    if (desc.includes('读取') || desc.includes('获取') || desc.includes('查询')) return 'R';
+    if (desc.includes('写入') || desc.includes('保存') || desc.includes('记录') || desc.includes('更新') || desc.includes('生成')) return 'W';
+    if (desc.includes('返回') || desc.includes('输出') || desc.includes('响应')) return 'X';
+    return '';
+  };
+
+  // ===== 步骤3：根据类型选择合适的动词和后缀 =====
+  const getOptimalVerbAndSuffix = (type, action, funcProcess) => {
+    const templates = {
+      'E': { verbs: ['接收'], suffixes: ['请求', '参数', '指令'] },
+      'R': { verbs: ['读取', '获取', '查询'], suffixes: ['配置', '规则', '数据表'] },
+      'W': { verbs: ['记录', '生成', '写入'], suffixes: ['日志', '结果', '文件'] },
+      'X': { verbs: ['返回', '输出'], suffixes: ['结果', '响应', '数据'] }
+    };
+
+    // 如果类型未识别，根据功能过程的动词来推断
+    let effectiveType = type;
+    if (!effectiveType && funcProcess) {
+      // 根据功能过程的动词推断子过程类型
+      if (funcProcess.match(/^(查询|查看|获取|统计|分析)/)) effectiveType = 'E'; // 查询类功能的E
+      else if (funcProcess.match(/^(创建|新增|添加)/)) effectiveType = 'E'; // 创建类功能的E
+      else if (funcProcess.match(/^(修改|编辑|更新)/)) effectiveType = 'E'; // 修改类功能的E  
+      else if (funcProcess.match(/^(删除|移除)/)) effectiveType = 'E'; // 删除类功能的E
+      else if (funcProcess.match(/^(导出|下载)/)) effectiveType = 'E'; // 导出类功能的E
+      else if (funcProcess.match(/^(导入|上传)/)) effectiveType = 'E'; // 导入类功能的E
+      else if (funcProcess.match(/^(启用|禁用|执行|批量)/)) effectiveType = 'E'; // 操作类功能的E
+      else effectiveType = 'E'; // 默认按E处理（入口）
+    }
+
+    // 确保有有效的模板（绝不使用"处理"作为动词）
+    const template = templates[effectiveType] || templates['E']; // 兜底使用E类型，而不是"处理"
+    const verb = template.verbs[0]; // 取第一个作为默认动词
+
+    // 根据功能过程的动作类型选择后缀
+    let suffix = template.suffixes[0];
+    if (action === '查询' || action === '统计') suffix = template.suffixes[0] || '条件';
+    if (action === '导出') suffix = '文件';
+    if (action === '创建' || action === '新增') suffix = '记录';
+
+    return { verb, suffix };
+  };
+
+  // ===== 步骤4：智能生成精简的子过程描述 =====
+  const { keywords, action } = extractCoreKeywords(functionalProcess);
+  const type = detectSubProcessType(originalDesc);
+  const { verb, suffix } = getOptimalVerbAndSuffix(type, action, functionalProcess);
+
+  // 检查是否需要重新生成（原描述太简单或太长）
+  const needsRegeneration =
+    originalDesc.length < 8 ||
+    originalDesc.length > 15 ||
+    /^(接收|读取|写入|返回)(请求|数据|结果)$/.test(originalDesc);
+
+  if (!needsRegeneration && originalDesc.length >= 10 && originalDesc.length <= 15) {
+    // 原描述长度合适且不太简单，保留
     return originalDesc;
   }
 
-  // 根据子过程描述的动词类型，构建语义化的描述
-  for (const prefix of subProcessPrefixes) {
-    if (originalDesc.startsWith(prefix)) {
-      const rest = originalDesc.slice(prefix.length);
-      // 检查剩余部分是否已有业务对象
-      if (rest.includes(businessObject.slice(0, 4))) {
-        // 已有部分关键词，看是否需要补充
-        if (isTooSimple) {
-          // 仍然需要丰富：动词 + 业务对象 + 动作类型 + 原有后缀
-          const suffix = rest.replace(/数据|信息|结果|请求|响应|日志|记录/g, '').trim();
-          const actionSuffix = actionVerb ? actionVerb : '';
-          return `${prefix}${businessObject}${actionSuffix}${suffix || rest}`.slice(0, 18);
-        }
-        return originalDesc;
-      }
-      // 构建新描述：动词 + 业务对象 + 动作类型 + 原有后缀
-      const actionSuffix = actionVerb ? actionVerb : '';
-      const cleanRest = rest.replace(/^(的|了|到|从|中|上|下|里|内|外)/, '').trim();
-      return `${prefix}${businessObject}${actionSuffix}${cleanRest}`.slice(0, 18);
-    }
+  // 生成新描述：动词 + 核心关键词 + 后缀
+  // 确保总长度在10-15字之间
+  let newDesc = `${verb}${keywords}${suffix}`;
+
+  // 精确控制长度
+  if (newDesc.length < 10) {
+    // 太短，补充更多业务信息
+    const extraInfo = action || functionalProcess.slice(0, 4);
+    newDesc = `${verb}${keywords}${extraInfo}${suffix}`;
   }
 
-  // 如果没有匹配到前缀，在开头添加业务上下文
-  return `${businessObject}${actionVerb}${originalDesc}`.slice(0, 18);
+  // 最终截断到15字
+  newDesc = newDesc.slice(0, 15);
+
+  // 确保不少于10字（兜底）
+  if (newDesc.length < 10 && keywords.length > 0) {
+    // 补充原描述的部分内容
+    const originalSuffix = originalDesc.replace(verb, '').slice(0, 5);
+    newDesc = (verb + keywords + originalSuffix).slice(0, 15);
+  }
+
+  return newDesc;
 }
 
 // 在子过程描述中插入功能过程关键词（保留原函数作为备用）
@@ -4086,6 +4686,58 @@ app.post('/api/parse-table', async (req, res) => {
   } catch (error) {
     console.error('解析表格失败:', error);
     res.status(500).json({ error: '解析表格失败: ' + error.message });
+  }
+});
+
+// 🔄 模型切换API
+app.post('/api/switch-model', (req, res) => {
+  try {
+    const { model, provider } = req.body;
+
+    console.log(`收到模型切换请求: ${model} (provider: ${provider})`);
+
+    // 根据选择的模型更新环境变量
+    if (model === 'deepseek-32b') {
+      process.env.OPENAI_API_KEY = process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY;
+      process.env.OPENAI_BASE_URL = 'https://api.siliconflow.cn/v1';
+      process.env.OPENAI_MODEL = 'deepseek-ai/DeepSeek-R1-Distill-Qwen-32B';
+      process.env.THREE_LAYER_PROVIDER = 'openai';
+      console.log('✅ 已切换到 DeepSeek-R1-Distill-Qwen-32B 模型');
+    } else if (model === 'deepseek-r1') {
+      process.env.OPENAI_API_KEY = process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY;
+      process.env.OPENAI_BASE_URL = 'https://api.siliconflow.cn/v1';
+      process.env.OPENAI_MODEL = 'deepseek-ai/DeepSeek-R1';
+      process.env.THREE_LAYER_PROVIDER = 'openai';
+      console.log('✅ 已切换到 DeepSeek-R1 模型');
+    } else if (model === 'deepseek-v3') {
+      process.env.OPENAI_API_KEY = process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY;
+      process.env.OPENAI_BASE_URL = 'https://api.siliconflow.cn/v1';
+      process.env.OPENAI_MODEL = 'deepseek-ai/DeepSeek-V3.2';
+      process.env.THREE_LAYER_PROVIDER = 'openai';
+      console.log('✅ 已切换到 DeepSeek-V3.2 模型');
+    } else if (model === 'zhipu') {
+      process.env.OPENAI_API_KEY = process.env.ZHIPU_API_KEY;
+      process.env.OPENAI_BASE_URL = process.env.ZHIPU_BASE_URL;
+      process.env.OPENAI_MODEL = process.env.ZHIPU_MODEL;
+      process.env.THREE_LAYER_PROVIDER = 'zhipu';
+      console.log('✅ 已切换到 智谱GLM-4.5-Flash 模型');
+    }
+
+    // 重置客户端，下次调用时会用新的配置重新初始化
+    openai = null;
+
+    res.json({
+      success: true,
+      message: `已切换到 ${model} 模型`,
+      config: {
+        model: process.env.OPENAI_MODEL,
+        baseUrl: process.env.OPENAI_BASE_URL,
+        provider: process.env.THREE_LAYER_PROVIDER
+      }
+    });
+  } catch (error) {
+    console.error('模型切换失败:', error);
+    res.status(500).json({ error: '模型切换失败: ' + error.message });
   }
 });
 

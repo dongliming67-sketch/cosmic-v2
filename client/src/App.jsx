@@ -93,20 +93,43 @@ function App() {
   const [addFunctionInput, setAddFunctionInput] = useState(''); // 用户输入的需求描述
   const [isAnalyzingNewFunction, setIsAnalyzingNewFunction] = useState(false); // 是否正在AI分析
 
-  // 两步骤COSMIC拆分相关状态
   const [twoStepFunctionList, setTwoStepFunctionList] = useState(''); // 第一步识别的功能过程列表
   const [showFunctionListEditor, setShowFunctionListEditor] = useState(false); // 是否显示功能过程列表编辑器
   const [isTwoStepProcessing, setIsTwoStepProcessing] = useState(false); // 是否正在两步骤处理中
   const [twoStepCurrentStep, setTwoStepCurrentStep] = useState(0); // 当前步骤：0=未开始，1=功能识别中，2=等待确认，3=COSMIC拆分中
+
+  // 模型选择相关状态
+  const [selectedModel, setSelectedModel] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return window.localStorage.getItem('selectedModel') || 'deepseek-32b';
+    }
+    return 'deepseek-32b';
+  }); // 'deepseek-32b' | 'deepseek-r1'
+  const [showModelSelector, setShowModelSelector] = useState(false); // 是否显示模型选择弹窗
+
+  // API配置弹窗相关状态
+  const [showApiSetupModal, setShowApiSetupModal] = useState(false); // 是否显示API配置弹窗
+  const [userApiKey, setUserApiKey] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return window.localStorage.getItem('userApiKey') || '';
+    }
+    return '';
+  });
+  const [isApiKeySaving, setIsApiKeySaving] = useState(false); // 是否正在保存API Key
 
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const dropZoneRef = useRef(null);
   const abortControllerRef = useRef(null); // 用于中断正在进行的分析
 
-  // 检查API状态
+  // 检查API状态和是否需要显示配置弹窗
   useEffect(() => {
     checkApiStatus();
+    // 检查是否已配置过API Key，如果没有则显示配置弹窗
+    const savedApiKey = window.localStorage.getItem('userApiKey');
+    if (!savedApiKey) {
+      setShowApiSetupModal(true);
+    }
   }, []);
 
   // 持久化最小功能过程数量
@@ -123,6 +146,13 @@ function App() {
     }
   }, [threeLayerProvider]);
 
+  // 持久化选中的模型
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('selectedModel', selectedModel);
+    }
+  }, [selectedModel]);
+
   // 自动滚动到底部
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -137,6 +167,64 @@ function App() {
       }
     } catch (error) {
       console.error('检查API状态失败:', error);
+    }
+  };
+
+  // 切换模型
+  const handleModelChange = async (model) => {
+    setSelectedModel(model);
+    setShowModelSelector(false);
+
+    // 根据选择的模型更新提供商
+    let provider = 'openai';
+    if (model === 'zhipu') provider = 'zhipu';
+
+    try {
+      // 通知后端切换模型
+      await axios.post('/api/switch-model', { model, provider });
+
+      let modelLabel = '';
+      if (model === 'deepseek-32b') modelLabel = 'DeepSeek-R1-32B';
+      else if (model === 'deepseek-r1') modelLabel = 'DeepSeek-R1 (满血版)';
+      else if (model === 'deepseek-v3') modelLabel = 'DeepSeek-V3.2';
+      else if (model === 'zhipu') modelLabel = '智谱GLM-4.5-Flash';
+
+      showToast(`已切换到${modelLabel}模型`);
+    } catch (error) {
+      console.error('切换模型失败:', error);
+      showToast('切换模型失败: ' + error.message);
+    }
+  };
+
+  // 保存用户API密钥
+  const saveUserApiKey = async () => {
+    if (!userApiKey.trim()) {
+      showToast('请输入有效的API密钥');
+      return;
+    }
+
+    setIsApiKeySaving(true);
+    try {
+      // 保存到本地
+      window.localStorage.setItem('userApiKey', userApiKey);
+
+      // 同步到后端
+      await axios.post('/api/config', {
+        apiKey: userApiKey,
+        baseUrl: 'https://api.siliconflow.cn/v1'
+      });
+
+      // 切换到默认模型
+      await handleModelChange(selectedModel);
+
+      setShowApiSetupModal(false);
+      checkApiStatus();
+      showToast('API密钥已保存且已激活');
+    } catch (error) {
+      console.error('保存API密钥失败:', error);
+      showToast('保存失败: ' + error.message);
+    } finally {
+      setIsApiKeySaving(false);
     }
   };
 
@@ -164,6 +252,11 @@ function App() {
   const saveApiConfig = async () => {
     try {
       await axios.post('/api/config', { apiKey, baseUrl });
+      // 如果是在设置面板修改，也同步到用户API Key状态中以便持久化
+      if (apiKey) {
+        window.localStorage.setItem('userApiKey', apiKey);
+        setUserApiKey(apiKey);
+      }
       setShowSettings(false);
       checkApiStatus();
       showToast('API配置已保存');
@@ -1741,6 +1834,16 @@ ${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能
               <Trash2 className="w-4 h-4" />
             </button>
 
+            {/* 模型选择按钮 */}
+            <button
+              onClick={() => setShowModelSelector(true)}
+              className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium bg-[#D97757] text-white hover:bg-[#C4684A] rounded-lg transition-all"
+              title="选择AI模型"
+            >
+              <Bot className="w-4 h-4" />
+              <span>{selectedModel === 'deepseek' ? 'DeepSeek-R1' : '智谱GLM'}</span>
+            </button>
+
             {/* 设置按钮 */}
             <button
               onClick={() => setShowSettings(true)}
@@ -2646,6 +2749,90 @@ ${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能
         </div>
       )}
 
+      {/* 模型选择弹窗 */}
+      {showModelSelector && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md m-4">
+            <div className="flex items-center justify-between p-6 border-b border-gray-200">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-[#FEF7F4] rounded-lg flex items-center justify-center">
+                  <Bot className="w-5 h-5 text-[#D97757]" />
+                </div>
+                <div>
+                  <h2 className="text-xl font-semibold text-gray-800">选择AI模型</h2>
+                  <p className="text-sm text-gray-500">选择您想使用的AI模型</p>
+                </div>
+              </div>
+              <button onClick={() => setShowModelSelector(false)} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+            <div className="p-6 space-y-3">
+              <button onClick={() => handleModelChange('deepseek-32b')} className={`w-full p-4 border-2 rounded-xl text-left transition-all ${selectedModel === 'deepseek-32b' ? 'border-[#D97757] bg-[#FEF7F4]' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'}`}>
+                <div className="flex items-center justify-between">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <h3 className="font-semibold text-gray-800">DeepSeek-R1-32B</h3>
+                      <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded-full">高性价比</span>
+                    </div>
+                    <p className="text-sm text-gray-500">蒸馏版 Qwen-32B，速度极快</p>
+                    <p className="text-xs text-gray-400 mt-1">✓ 推理能力强 • 响应快 • 硅基流动强力推荐</p>
+                  </div>
+                  {selectedModel === 'deepseek-32b' && <CheckCircle className="w-6 h-6 text-[#D97757] flex-shrink-0" />}
+                </div>
+              </button>
+
+              <button onClick={() => handleModelChange('deepseek-r1')} className={`w-full p-4 border-2 rounded-xl text-left transition-all ${selectedModel === 'deepseek-r1' ? 'border-[#D97757] bg-[#FEF7F4]' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'}`}>
+                <div className="flex items-center justify-between">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <h3 className="font-semibold text-gray-800">DeepSeek-R1 (满血版)</h3>
+                      <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-xs rounded-full">推理之王</span>
+                    </div>
+                    <p className="text-sm text-gray-500">671B 参数，最强逻辑推理</p>
+                    <p className="text-xs text-gray-400 mt-1">✓ 极强逻辑能力 • 适合复杂需求 • 硅基流动托管</p>
+                  </div>
+                  {selectedModel === 'deepseek-r1' && <CheckCircle className="w-6 h-6 text-[#D97757] flex-shrink-0" />}
+                </div>
+              </button>
+
+              <button onClick={() => handleModelChange('deepseek-v3')} className={`w-full p-4 border-2 rounded-xl text-left transition-all ${selectedModel === 'deepseek-v3' ? 'border-[#D97757] bg-[#FEF7F4]' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'}`}>
+                <div className="flex items-center justify-between">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <h3 className="font-semibold text-gray-800">DeepSeek-V3.2</h3>
+                      <span className="px-2 py-0.5 bg-indigo-100 text-indigo-700 text-xs rounded-full">通用顶尖</span>
+                    </div>
+                    <p className="text-sm text-gray-500">最新 V3.2 常规模型</p>
+                    <p className="text-xs text-gray-400 mt-1">✓ 极速响应 • 综合素质极高 • 编程与通用对齐</p>
+                  </div>
+                  {selectedModel === 'deepseek-v3' && <CheckCircle className="w-6 h-6 text-[#D97757] flex-shrink-0" />}
+                </div>
+              </button>
+
+              <button onClick={() => handleModelChange('zhipu')} className={`w-full p-4 border-2 rounded-xl text-left transition-all ${selectedModel === 'zhipu' ? 'border-[#D97757] bg-[#FEF7F4]' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'}`}>
+                <div className="flex items-center justify-between">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <h3 className="font-semibold text-gray-800">智谱GLM-4.5-Flash</h3>
+                      <span className="px-2 py-0.5 bg-green-100 text-green-700 text-xs rounded-full">国产之光</span>
+                    </div>
+                    <p className="text-sm text-gray-500">GLM-4.5-Flash (智谱AI)</p>
+                    <p className="text-xs text-gray-400 mt-1">✓ 语义理解佳 • 速度稳定 • 免费额度高</p>
+                  </div>
+                  {selectedModel === 'zhipu' && <CheckCircle className="w-6 h-6 text-[#D97757] flex-shrink-0" />}
+                </div>
+              </button>
+            </div>
+            <div className="px-6 pb-6">
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+                <p className="text-xs text-amber-800">💡 提示：两个模型均支持免费使用。DeepSeek-R1推理能力强，智谱GLM-4.5-Flash响应速度更快。</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Red Alert GI Watermark */}
       <div className="gi-watermark">
         <div className="gi-soldier"></div>
@@ -2731,6 +2918,144 @@ ${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能
                   <Zap className="w-4 h-4" />
                   <span>开始COSMIC拆分</span>
                 </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* API配置引导弹窗 */}
+      {showApiSetupModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl overflow-hidden animate-in fade-in zoom-in duration-300">
+            <div className="flex flex-col md:flex-row h-full">
+              {/* 左侧装饰栏 */}
+              <div className="bg-gradient-to-br from-[#D97757] to-[#B05C42] p-8 text-white md:w-1/3 flex flex-col justify-between">
+                <div>
+                  <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center mb-6 backdrop-blur-md">
+                    <Zap className="w-6 h-6 text-white" />
+                  </div>
+                  <h2 className="text-2xl font-bold leading-tight mb-2">欢迎使用 COSMIC 拆分工具</h2>
+                  <p className="text-white/80 text-sm">配置您的专属 API 密钥，即可开启高效、精准的自动化 COSMIC 拆分之旅。</p>
+                </div>
+                <div className="space-y-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center text-xs font-bold">1</div>
+                    <span className="text-sm">注册账号</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center text-xs font-bold">2</div>
+                    <span className="text-sm">获取密钥</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center text-xs font-bold">3</div>
+                    <span className="text-sm">即刻拆分</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* 右侧内容区 */}
+              <div className="flex-1 p-8 space-y-6 bg-white overflow-y-auto max-h-[80vh] md:max-h-none">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xl font-bold text-gray-800">一、 账号注册流程</h3>
+                  {!window.localStorage.getItem('userApiKey') ? null : (
+                    <button onClick={() => setShowApiSetupModal(false)} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
+                      <X className="w-5 h-5 text-gray-400" />
+                    </button>
+                  )}
+                </div>
+
+                <div className="space-y-4 text-sm text-gray-600">
+                  <div className="bg-blue-50 border-l-4 border-blue-500 p-4 rounded-r-lg">
+                    <p className="font-semibold text-blue-800 mb-1">1. 访问官网</p>
+                    <p>前往硅基流动官方平台：<a href="https://cloud.siliconflow.cn" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline font-medium">cloud.siliconflow.cn</a></p>
+                  </div>
+
+                  <div className="bg-orange-50 border-l-4 border-orange-500 p-4 rounded-r-lg">
+                    <p className="font-semibold text-orange-800 mb-1">2. 填写邀请码（重点！）</p>
+                    <p className="mb-2">准确填入专属代码，即可激活新手福利代金券：</p>
+                    <div className="flex items-center gap-2 bg-white border border-orange-200 p-2 rounded-lg">
+                      <code className="text-[#D97757] font-bold flex-1 break-all">W202511301022310082000700854344</code>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText('W202511301022310082000700854344');
+                          showToast('邀请码已复制');
+                        }}
+                        className="p-1.5 hover:bg-orange-100 rounded text-orange-600 transition-colors"
+                      >
+                        <Copy className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="bg-green-50 border-l-4 border-green-500 p-4 rounded-r-lg">
+                    <p className="font-semibold text-green-800 mb-1">3. 创建 API 密钥</p>
+                    <p>实名认证后，点击左侧 <span className="font-bold">“API 密钥”</span> &rarr; <span className="font-bold">“创建新 API 密钥”</span>，并将以 <code className="bg-green-100 px-1 rounded text-green-700">sk-</code> 开头的密钥复制到下方。</p>
+                  </div>
+                </div>
+
+                <div className="pt-4 border-t border-gray-100">
+                  <h3 className="text-xl font-bold text-gray-800 mb-4">二、 填写 API 密钥</h3>
+                  <div className="space-y-4">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">SiliconFlow API Key</label>
+                      <div className="relative">
+                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                          <Zap className="h-4 w-4 text-gray-400" />
+                        </div>
+                        <input
+                          type="password"
+                          value={userApiKey}
+                          onChange={(e) => setUserApiKey(e.target.value)}
+                          placeholder="请输入 sk- 开头的 API 密钥"
+                          className="block w-full pl-10 pr-3 py-3 border border-gray-200 rounded-xl leading-5 bg-gray-50 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#D97757] focus:border-transparent sm:text-sm transition-all"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">选择初始模型</label>
+                      <div className="grid grid-cols-2 gap-3">
+                        <button
+                          onClick={() => setSelectedModel('deepseek-32b')}
+                          className={`p-3 text-[10px] font-medium rounded-xl border-2 transition-all ${selectedModel === 'deepseek-32b' ? 'border-[#D97757] bg-[#FEF7F4] text-[#D97757]' : 'border-gray-100 text-gray-500 hover:border-gray-200'}`}
+                        >
+                          R1-32B (蒸馏)
+                        </button>
+                        <button
+                          onClick={() => setSelectedModel('deepseek-r1')}
+                          className={`p-3 text-[10px] font-medium rounded-xl border-2 transition-all ${selectedModel === 'deepseek-r1' ? 'border-[#D97757] bg-[#FEF7F4] text-[#D97757]' : 'border-gray-100 text-gray-500 hover:border-gray-200'}`}
+                        >
+                          R1 (满血)
+                        </button>
+                        <button
+                          onClick={() => setSelectedModel('deepseek-v3')}
+                          className={`p-3 text-[10px] font-medium rounded-xl border-2 transition-all ${selectedModel === 'deepseek-v3' ? 'border-[#D97757] bg-[#FEF7F4] text-[#D97757]' : 'border-gray-100 text-gray-500 hover:border-gray-200'}`}
+                        >
+                          V3.2 (常规)
+                        </button>
+                        <button
+                          onClick={() => setSelectedModel('zhipu')}
+                          className={`p-3 text-[10px] font-medium rounded-xl border-2 transition-all ${selectedModel === 'zhipu' ? 'border-[#D97757] bg-[#FEF7F4] text-[#D97757]' : 'border-gray-100 text-gray-500 hover:border-gray-200'}`}
+                        >
+                          GLM-4.5
+                        </button>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={saveUserApiKey}
+                      disabled={isApiKeySaving || !userApiKey.trim()}
+                      className="w-full py-4 bg-[#D97757] hover:bg-[#B05C42] text-white rounded-xl font-bold shadow-lg shadow-orange-200 transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                    >
+                      {isApiKeySaving ? <Loader2 className="w-5 h-5 animate-spin" /> : <CheckCircle className="w-5 h-5" />}
+                      {isApiKeySaving ? '正在保存配置...' : '保存并开始使用'}
+                    </button>
+
+                    <p className="text-[10px] text-center text-gray-400 px-4">
+                      您的密钥将本地存储并仅用于与硅基流动 API 通信。请妥善保管，不要向他人泄露。
+                    </p>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
