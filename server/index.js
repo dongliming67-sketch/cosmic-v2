@@ -1405,19 +1405,34 @@ app.post('/api/two-step/extract-functions', async (req, res) => {
   try {
     const { documentContent, userConfig = null } = req.body;
 
+    // 调试日志
+    console.log('\n' + '='.repeat(60));
+    console.log('📋 两步骤COSMIC拆分 - 第一步：功能过程识别');
+    console.log('文档长度:', documentContent?.length || 0);
+    console.log('🔑 userConfig 接收情况:', userConfig ? {
+      hasApiKey: !!userConfig.apiKey,
+      apiKeyPrefix: userConfig.apiKey ? userConfig.apiKey.substring(0, 10) + '...' : 'null',
+      baseUrl: userConfig.baseUrl,
+      model: userConfig.model,
+      provider: userConfig.provider
+    } : 'null (未传递)');
+    console.log('='.repeat(60));
+
     if (!documentContent || !documentContent.trim()) {
       return res.status(400).json({ error: '请提供需求文档内容' });
     }
 
     const clientConfig = getActiveClientConfig(userConfig);
     if (!clientConfig) {
+      console.log('❌ 无法获取客户端配置，userConfig 和环境变量均未设置');
       return res.status(400).json({ error: '请先配置API密钥' });
     }
 
-    console.log('\n' + '='.repeat(60));
-    console.log('📋 两步骤COSMIC拆分 - 第一步：功能过程识别');
-    console.log('文档长度:', documentContent.length);
-    console.log('='.repeat(60));
+    console.log('✅ 客户端配置成功:', {
+      provider: clientConfig.provider,
+      model: clientConfig.model,
+      useGeminiSDK: clientConfig.useGeminiSDK
+    });
 
     const { client, model, useGeminiSDK } = clientConfig;
 
