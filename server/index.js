@@ -1401,6 +1401,121 @@ app.post('/api/split-from-function-list', (req, res) => {
 
 // ========== 两步骤COSMIC拆分模式 API ==========
 // 步骤1：功能过程识别（从需求文档中提取功能过程）
+// ═══════════════════════════════════════════════════════════
+// 🔧 全局数据属性清洗函数 (核心工具)
+// ═══════════════════════════════════════════════════════════
+// 清洗数据属性（英文转中文、格式规范化、过滤动词前缀、去重补充）
+const cleanDataAttributes = (attrs, dataMovementType = '') => {
+  if (!attrs) return attrs;
+
+  // 1. 英文字段名到中文的映射 (汇总版)
+  const fieldMapping = {
+    // 标识类
+    'cell_id': '小区标识', 'cellid': '小区标识', 'CELL_ID': '小区标识',
+    'gNBId': '基站编号', 'gnbid': '基站编号', 'gNB_ID': '基站编号',
+    'task_id': '任务编号', 'taskid': '任务编号', 'TASK_ID': '任务编号',
+    'user_id': '用户编号', 'userid': '用户编号', 'USER_ID': '用户编号',
+    'request_id': '请求标识', 'requestid': '请求标识', 'REQUEST_ID': '请求标识',
+    'node_id': '节点编号', 'nodeid': '节点编号', 'NODE_ID': '节点编号', 'NODEB_ID': '基站编号',
+    'scene_name': '场景名称', 'scenename': '场景名称', 'SCENE_NAME': '场景名称',
+
+    // 网络相关
+    'DU_me_moid': '设备标识', 'du_me_moid': '设备标识',
+    'NR_PHYSICAL_CELL_DU_ID': '物理小区标识', 'nr_physical_cell_du_id': '物理小区标识',
+    'gNBIdLength': '基站编号长度', 'gnbidlength': '基站编号长度',
+    'CGI': '小区全局标识', 'cgi': '小区全局标识',
+    'NGI': '网络全局标识', 'ngi': '网络全局标识',
+    'TCP_POOR_RT': 'TCP差比率', 'tcp_poor_rt': 'TCP差比率',
+    'TCP_POOR_SESN_CNT': 'TCP差会话数', 'tcp_poor_sesn_cnt': 'TCP差会话数',
+    'DL_SESN_DUR': '下行会话时长', 'dl_sesn_dur': '下行会话时长',
+    'UL_SESN_DUR': '上行会话时长', 'ul_sesn_dur': '上行会话时长',
+    'DL_RTT_LAT': '下行时延', 'dl_rtt_lat': '下行时延',
+    'UL_RTT_LAT': '上行时延', 'ul_rtt_lat': '上行时延',
+    'DL_DATA_MB': '下行数据量', 'dl_data_mb': '下行数据量',
+    'UL_DATA_MB': '上行数据量', 'ul_data_mb': '上行数据量',
+    'TOTAL_TRAFFIC_GB': '总流量', 'total_traffic_gb': '总流量',
+
+    // 时间类
+    'create_time': '创建时间', 'createtime': '创建时间', 'CREATE_TIME': '创建时间',
+    'update_time': '更新时间', 'updatetime': '更新时间', 'UPDATE_TIME': '更新时间',
+    'start_time': '开始时间', 'starttime': '开始时间', 'START_TIME': '开始时间',
+    'end_time': '结束时间', 'endtime': '结束时间', 'END_TIME': '结束时间',
+    'timestamp': '时间戳', 'TIMESTAMP': '时间戳',
+
+    // 状态与通用
+    'status': '状态', 'STATUS': '状态', 'state': '状态', 'STATE': '状态',
+    'name': '名称', 'NAME': '名称', 'type': '类型', 'TYPE': '类型',
+    'vendor': '厂商', 'city': '城市', 'county': '区县', 'file_name': '文件名称'
+  };
+
+  let cleaned = attrs;
+  for (const [eng, chn] of Object.entries(fieldMapping)) {
+    const regex = new RegExp(`\\b${eng}\\b`, 'gi');
+    cleaned = cleaned.replace(regex, chn);
+  }
+
+  // 2. 规范化分隔符 (英文逗号/空格 -> 中文顿号)
+  cleaned = cleaned.replace(/[,\s|]+/g, '、');
+  cleaned = cleaned.replace(/^、|、$/g, '');
+
+  // 3. 【核心】过滤动词前缀
+  const verbBlacklist = [
+    '删除', '修改', '新增', '查询', '创建', '更新', '启用', '禁用',
+    '读取', '写入', '接收', '返回', '记录', '获取', '设置', '配置',
+    '添加', '移除', '编辑', '保存', '提交', '取消', '批量', '导入',
+    '导出', '上传', '下载', '查看', '审批', '执行', '同步', '验证',
+    '校验', '检查', '确认', '审核', '通过', '拒绝', '撤销', '终止',
+    '暂停', '恢复', '重启', '刷新', '加载', '解析', '转换', '生成',
+    '计算', '统计', '汇总', '分析', '处理', '发送', '推送', '通知'
+  ];
+
+  let fields = cleaned.split('、').map(f => f.trim()).filter(f => f.length >= 2);
+  const originalCount = fields.length;
+
+  fields = fields.map(field => {
+    let cleanField = field;
+    for (const verb of verbBlacklist) {
+      if (cleanField.startsWith(verb)) {
+        const temp = cleanField.substring(verb.length);
+        if (temp.length >= 2) {
+          cleanField = temp;
+          break;
+        }
+      }
+    }
+    return cleanField;
+  });
+
+  // 4. 去重
+  fields = [...new Set(fields)];
+
+  // 5. 如果字段过少，从标准字段库补充
+  const standardFieldsByType = {
+    'E': ['请求标识', '条件标识', '会话ID', '来源渠道', '时间戳', '用户标识'],
+    'R': ['业务对象ID', '对象名称', '当前状态', '配置版本', '规则标识', '数据源'],
+    'W': ['流水号', '批次号', '操作时间', '日志ID', '变更类型', '持久化路径'],
+    'X': ['响应状态码', '处理回执', '结果数量', '处理耗时', '成功标记', '分页令牌']
+  };
+  const genericFields = ['ID', '名称', '类型', '状态', '时间', '编号'];
+
+  if (fields.length < 3) {
+    const supplementPool = standardFieldsByType[dataMovementType] || genericFields;
+    for (const f of supplementPool) {
+      if (!fields.some(existing => existing.includes(f) || f.includes(existing))) {
+        fields.push(f);
+        if (fields.length >= 3) break;
+      }
+    }
+  }
+
+  // 6. 限制最大长度
+  if (fields.length > 8) {
+    fields = fields.slice(0, 8);
+  }
+
+  return fields.join('、');
+};
+
 app.post('/api/two-step/extract-functions', async (req, res) => {
   try {
     const { documentContent, userConfig = null } = req.body;
@@ -1951,37 +2066,6 @@ ${functionProcessList}
       return cleaned.slice(0, 15);
     };
 
-    // 清洗数据属性（英文转中文、格式规范化）
-    const cleanDataAttributes = (attrs) => {
-      if (!attrs) return attrs;
-
-      // 常见英文字段名到中文的映射表
-      const fieldMapping = {
-        'cell_id': '小区标识', 'task_id': '任务编号', 'user_id': '用户编号',
-        'create_time': '创建时间', 'update_time': '更新时间', 'start_time': '开始时间',
-        'end_time': '结束时间', 'status': '状态', 'name': '名称', 'type': '类型'
-      };
-
-      let cleaned = attrs;
-      for (const [eng, chn] of Object.entries(fieldMapping)) {
-        const regex = new RegExp(`\\b${eng}\\b`, 'gi');
-        cleaned = cleaned.replace(regex, chn);
-      }
-
-      // 将英文逗号替换为中文顿号
-      cleaned = cleaned.replace(/,\s*/g, '、');
-      cleaned = cleaned.replace(/、+/g, '、');
-      cleaned = cleaned.replace(/^、|、$/g, '');
-
-      // 截断过长的属性列表（最多8个）
-      const fields = cleaned.split('、').map(f => f.trim()).filter(f => f);
-      if (fields.length > 8) {
-        cleaned = fields.slice(0, 8).join('、');
-      }
-
-      return cleaned;
-    };
-
     // 智能归一化触发类型
     const normalizeUserTrigger = (userVal = '', triggerVal = '', functionalProcess = '') => {
       const user = (userVal || '').trim();
@@ -2088,7 +2172,7 @@ ${functionProcessList}
           dataGroup = cleanDataGroupName(dataGroup);
 
           dataAttributes = sanitizeText(dataAttributes);
-          dataAttributes = cleanDataAttributes(dataAttributes);
+          dataAttributes = cleanDataAttributes(dataAttributes, dataMovementType);
 
           // 补全缺失的数据组
           if (!dataGroup && currentFunctionalProcess) {
@@ -2916,13 +3000,13 @@ async function performFinalDeduplication(tableData) {
 
       // 0. 【新增】首先移除所有动词前缀（这是最关键的修复）
       const actionVerbs = [
-        '编辑', '修改', '更新', '删除', '创建', '新增', '添加', '移除', '设置',
-        '配置', '调整', '变更', '录入', '填写', '输入', '选择', '指定',
-        '查询', '查看', '检索', '搜索', '浏览', '读取', '获取', '提取',
-        '导出', '导入', '上传', '下载', '发送', '接收', '推送',
-        '执行', '处理', '操作', '启动', '关闭', '启用', '禁用', '激活',
-        '审核', '审批', '确认', '验证', '校验', '检测', '监控', '分析',
-        '计算', '统计', '汇总', '聚合', '整合', '合并', '拆分'
+        '删除', '修改', '新增', '查询', '创建', '更新', '启用', '禁用',
+        '读取', '写入', '接收', '返回', '记录', '获取', '设置', '配置',
+        '添加', '移除', '编辑', '保存', '提交', '取消', '批量', '导入',
+        '导出', '上传', '下载', '查看', '审批', '执行', '同步', '验证',
+        '校验', '检查', '确认', '审核', '通过', '拒绝', '撤销', '终止',
+        '暂停', '恢复', '重启', '刷新', '加载', '解析', '转换', '生成',
+        '计算', '统计', '汇总', '分析', '处理', '发送', '推送', '通知'
       ];
 
       let cleanedFieldName = fieldName;
@@ -3087,8 +3171,8 @@ async function performFinalDeduplication(tableData) {
           const vendorMatch = process.match(/(华为|中兴|爱立信|诺基亚)/);
           if (vendorMatch) return vendorMatch[1];
 
-          // 提取业务领域关键词（如"低空保障"、"参数配置"等）
-          const domainMatch = process.match(/(低空保障|低空|保障|参数|配置|自动化|任务|工单|告警|质差|优化|健康度|评估|统计|监控|管理|调度|执行|删除|创建|编辑|查看|启用|禁用|批量)/);
+          // 提取业务领域关键词（纯名词：如"保障"、"配置"等）
+          const domainMatch = process.match(/(低空保障|低空|保障|参数|配置|自动化|任务|工单|告警|质差|优化|健康度|评估|统计|监控|管理|调度|批量)/);
           if (domainMatch) return domainMatch[1];
 
           // 提取网络对象关键词
@@ -3151,8 +3235,8 @@ async function performFinalDeduplication(tableData) {
       const objectMatch = text.match(/(小区|基站|用户|网络|设备|站点|区域|地市)/);
       const object = objectMatch ? objectMatch[1] : '';
 
-      // 提取场景
-      const sceneMatch = text.match(/(质差|优化|告警|故障|投诉|工单|任务|健康度|评估|统计|汇总|编辑|删除|创建|查看|启用|禁用|执行|批量)/);
+      // 提取场景（纯名词）
+      const sceneMatch = text.match(/(质差|优化|告警|故障|投诉|工单|任务|健康度|评估|统计|汇总|详情|列表|批次|流水)/);
       const scene = sceneMatch ? sceneMatch[1] : '';
 
       // 提取核心词（移除动词后的剩余，但保留更多业务信息）
@@ -3285,7 +3369,9 @@ async function performFinalDeduplication(tableData) {
 
     // ===== 步骤7：最终清理和返回 =====
     const finalFields = fieldsArray.filter((v, i, a) => a.indexOf(v) === i);
-    return finalFields.slice(0, 8).join('、');
+    // 【新增】返回前最后一次清洗，确保所有差异化字段也不含动词
+    const finalAttrStr = finalFields.slice(0, 8).join('、');
+    return cleanDataAttributes(finalAttrStr, dataMovementType);
   };
 
   // 清理序号和括号的辅助函数（包括括号内的内容）
@@ -3688,7 +3774,8 @@ async function generateUniqueAttrString(originalAttrs, subProcessDesc, functiona
 
   // 去重并清理
   fieldsArray = [...new Set(fieldsArray)].filter(f => f && f.length >= 2);
-  return fieldsArray.slice(0, 8).join('、');
+  const finalAttrStr = fieldsArray.slice(0, 8).join('、');
+  return cleanDataAttributes(finalAttrStr, dataMovementType);
 }
 
 // 从子过程描述中提取关键词
@@ -4023,98 +4110,7 @@ app.post('/api/parse-table', async (req, res) => {
       return text;
     };
 
-    // 🔧 清洗数据属性：将英文字段名转为中文，将英文逗号转为顿号
-    const cleanDataAttributes = (attrs = '') => {
-      if (!attrs) return '';
-
-      // 英文字段名到中文的映射
-      const fieldMapping = {
-        // 标识类
-        'cell_id': '小区标识', 'cellid': '小区标识', 'CELL_ID': '小区标识',
-        'gNBId': '基站编号', 'gnbid': '基站编号', 'gNB_ID': '基站编号',
-        'task_id': '任务编号', 'taskid': '任务编号', 'TASK_ID': '任务编号',
-        'user_id': '用户编号', 'userid': '用户编号', 'USER_ID': '用户编号',
-        'request_id': '请求标识', 'requestid': '请求标识', 'REQUEST_ID': '请求标识',
-        'node_id': '节点编号', 'nodeid': '节点编号', 'NODE_ID': '节点编号', 'NODEB_ID': '基站编号',
-        'scene_name': '场景名称', 'scenename': '场景名称', 'SCENE_NAME': '场景名称',
-
-        // 网络相关
-        'DU_me_moid': '设备标识', 'du_me_moid': '设备标识',
-        'NR_PHYSICAL_CELL_DU_ID': '物理小区标识', 'nr_physical_cell_du_id': '物理小区标识',
-        'gNBIdLength': '基站编号长度', 'gnbidlength': '基站编号长度',
-        'CGI': '小区全局标识', 'cgi': '小区全局标识',
-        'NGI': '网络全局标识', 'ngi': '网络全局标识',
-        'TCP_POOR_RT': 'TCP差比率', 'tcp_poor_rt': 'TCP差比率',
-        'TCP_POOR_SESN_CNT': 'TCP差会话数', 'tcp_poor_sesn_cnt': 'TCP差会话数',
-        'DL_SESN_DUR': '下行会话时长', 'dl_sesn_dur': '下行会话时长',
-        'UL_SESN_DUR': '上行会话时长', 'ul_sesn_dur': '上行会话时长',
-        'DL_RTT_LAT': '下行时延', 'dl_rtt_lat': '下行时延',
-        'UL_RTT_LAT': '上行时延', 'ul_rtt_lat': '上行时延',
-        'DL_DATA_MB': '下行数据量', 'dl_data_mb': '下行数据量',
-        'UL_DATA_MB': '上行数据量', 'ul_data_mb': '上行数据量',
-        'TOTAL_SESN_CNT': '总会话数', 'total_sesn_cnt': '总会话数',
-        'AVG_TCP_RET_DATA': '平均TCP重传', 'avg_tcp_ret_data': '平均TCP重传',
-        'TCP_ESTB_ACK_LAT': 'TCP建链确认时延', 'tcp_estb_ack_lat': 'TCP建链确认时延',
-        'TCP_ESTB_RSP_LAT': 'TCP建链响应时延', 'tcp_estb_rsp_lat': 'TCP建链响应时延',
-        'SESN_ACK_FIR_DAT_LAT': '首包确认时延', 'sesn_ack_fir_dat_lat': '首包确认时延',
-        'UL_SESN_RATE_KBPS': '上行会话速率', 'ul_sesn_rate_kbps': '上行会话速率',
-        'DL_SESN_RATE_KBPS': '下行会话速率', 'dl_sesn_rate_kbps': '下行会话速率',
-        'AVG_TCP_ORD_PKT_CNT': '平均有序包数', 'avg_tcp_ord_pkt_cnt': '平均有序包数',
-        'AVG_TCP_LST_PKT_CNT': '平均丢包数', 'avg_tcp_lst_pkt_cnt': '平均丢包数',
-        'UDP_SESN_CNT': 'UDP会话数', 'udp_sesn_cnt': 'UDP会话数',
-
-        // 时间类
-        'create_time': '创建时间', 'createtime': '创建时间', 'CREATE_TIME': '创建时间',
-        'update_time': '更新时间', 'updatetime': '更新时间', 'UPDATE_TIME': '更新时间',
-        'start_time': '开始时间', 'starttime': '开始时间', 'START_TIME': '开始时间',
-        'end_time': '结束时间', 'endtime': '结束时间', 'END_TIME': '结束时间',
-        'timestamp': '时间戳', 'TIMESTAMP': '时间戳',
-
-        // 状态类
-        'status': '状态', 'STATUS': '状态',
-        'state': '状态', 'STATE': '状态',
-        'flag': '标志', 'FLAG': '标志',
-
-        // 通用类
-        'name': '名称', 'NAME': '名称',
-        'type': '类型', 'TYPE': '类型',
-        'count': '数量', 'COUNT': '数量',
-        'total': '总计', 'TOTAL': '总计',
-        'vendor': '厂商', 'VENDOR': '厂商',
-        'city': '城市', 'CITY': '城市',
-        'county': '区县', 'COUNTY': '区县',
-        'frequency': '频率', 'FREQUENCY': '频率',
-        'total_traffic_gb': '总流量', 'TOTAL_TRAFFIC_GB': '总流量',
-        'FILE_NAME': '文件名称', 'file_name': '文件名称',
-        'CELL_NAME': '小区名称', 'cell_name': '小区名称',
-      };
-
-      let cleaned = attrs;
-
-      // 1. 替换已知的英文字段名为中文
-      for (const [eng, chn] of Object.entries(fieldMapping)) {
-        const regex = new RegExp(`\\b${eng}\\b`, 'gi');
-        cleaned = cleaned.replace(regex, chn);
-      }
-
-      // 2. 将英文逗号替换为中文顿号
-      cleaned = cleaned.replace(/,\s*/g, '、');
-
-      // 3. 将 | 分隔符替换为顿号
-      cleaned = cleaned.replace(/\s*\|\s*/g, '、');
-
-      // 4. 清理多余的顿号
-      cleaned = cleaned.replace(/、+/g, '、');
-      cleaned = cleaned.replace(/^、|、$/g, '');
-
-      // 5. 截断过长的属性列表（最多保留8个字段）
-      const fields = cleaned.split('、').map(f => f.trim()).filter(f => f);
-      if (fields.length > 8) {
-        cleaned = fields.slice(0, 8).join('、');
-      }
-
-      return cleaned;
-    };
+    // 🔧 增强子过程描述 - 确保包含功能过程关键词，不要太简单
 
     // 🔧 增强子过程描述 - 确保包含功能过程关键词，不要太简单
     const enhanceSubProcessDesc = (desc = '', functionalProcess = '') => {
@@ -4397,8 +4393,8 @@ app.post('/api/parse-table', async (req, res) => {
         }
         rowFunctionalProcess = sanitizeText(rowFunctionalProcess);
 
-        // 🔧 应用数据属性清洗（英文转中文、逗号转顿号、截断过长）
-        dataAttributes = cleanDataAttributes(dataAttributes);
+        // 🔧 应用数据属性清洗（英文转中文、逗号转顿号、动词过滤、去重补充）
+        dataAttributes = cleanDataAttributes(dataAttributes, dataMovementType);
 
         // 🔧 增强子过程描述 - 确保包含完整的业务上下文
         subProcessDesc = enhanceSubProcessDesc(subProcessDesc, currentFunctionalProcess);

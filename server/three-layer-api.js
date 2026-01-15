@@ -898,7 +898,7 @@ function cleanupAIResponse(reply) {
 
   cleaned = processedLines.join('\n');
 
-  // 5. 【极重要】过滤数据属性中的动词前缀
+  // 5. 【极重要】过滤数据属性中的动词前缀，去重后补充标准字段
   // 动词黑名单：这些词不应该出现在数据属性字段名中
   const verbBlacklist = [
     '删除', '修改', '新增', '查询', '创建', '更新', '启用', '禁用',
@@ -910,6 +910,15 @@ function cleanupAIResponse(reply) {
     '计算', '统计', '汇总', '分析', '处理', '发送', '推送', '通知'
   ];
 
+  // 标准字段库（按数据移动类型分类）
+  const standardFieldsByType = {
+    'E': ['请求标识', '操作流水号', '会话标识', '业务优先级', '用户标识', '时间戳'],
+    'R': ['数据版本', '配置版本', '规则标识', '数据源', '有效标识', '时效标签'],
+    'W': ['记录ID', '批次号', '操作时间', '变更类型', '持久化标识', '流水号'],
+    'X': ['响应状态码', '处理时间', '结果数量', '响应序列', '处理回执', '耗时毫秒']
+  };
+  const genericFields = ['ID', '名称', '类型', '状态', '创建时间', '操作人', '描述', '编号'];
+
   // 对表格的最后一列（数据属性列）进行动词过滤
   const finalLines = cleaned.split('\n');
   const verbFilteredLines = finalLines.map(line => {
@@ -917,11 +926,15 @@ function cleanupAIResponse(reply) {
 
     const cols = line.split('|');
     if (cols.length >= 8) {
+      // 提取数据移动类型（索引5，因为split后第一个是空的）
+      const dataMovementType = (cols[5] || '').trim().toUpperCase();
+
       // 最后一列是数据属性（索引7，因为split后第一个是空的）
       let dataAttrs = cols[7] || '';
       const attrFields = dataAttrs.split(/[、,，]/).map(f => f.trim()).filter(f => f);
+      const originalCount = attrFields.length;
 
-      const cleanedFields = attrFields.map(field => {
+      let cleanedFields = attrFields.map(field => {
         let cleanField = field;
         // 检查字段是否以动词开头，如果是则移除
         for (const verb of verbBlacklist) {
@@ -938,8 +951,23 @@ function cleanupAIResponse(reply) {
       });
 
       // 去除重复字段（动词移除后可能导致重复）
-      const uniqueFields = [...new Set(cleanedFields)];
-      cols[7] = uniqueFields.join('、');
+      cleanedFields = [...new Set(cleanedFields)];
+
+      // 【新增】如果去重后字段过少（少于3个），从标准字段库补充
+      if (cleanedFields.length < 3) {
+        const supplementFields = standardFieldsByType[dataMovementType] || genericFields;
+        for (const field of supplementFields) {
+          // 避免添加已存在的字段（模糊匹配）
+          const alreadyExists = cleanedFields.some(f => f.includes(field) || field.includes(f));
+          if (!alreadyExists) {
+            cleanedFields.push(field);
+            if (cleanedFields.length >= 3) break;
+          }
+        }
+        console.log(`⚠️ 数据属性去重后过少(${originalCount}→${cleanedFields.length}个)，已从标准字段库补充`);
+      }
+
+      cols[7] = cleanedFields.join('、');
       return cols.join('|');
     }
     return line;
@@ -947,7 +975,7 @@ function cleanupAIResponse(reply) {
 
   cleaned = verbFilteredLines.join('\n');
 
-  console.log('三层分析框架 - 数据清洗完成（无省略号，已过滤动词前缀）');
+  console.log('三层分析框架 - 数据清洗完成（无省略号，已过滤动词前缀，已去重补充）');
   return cleaned;
 }
 
