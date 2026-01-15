@@ -898,7 +898,56 @@ function cleanupAIResponse(reply) {
 
   cleaned = processedLines.join('\n');
 
-  console.log('三层分析框架 - 数据清洗完成（无省略号）');
+  // 5. 【极重要】过滤数据属性中的动词前缀
+  // 动词黑名单：这些词不应该出现在数据属性字段名中
+  const verbBlacklist = [
+    '删除', '修改', '新增', '查询', '创建', '更新', '启用', '禁用',
+    '读取', '写入', '接收', '返回', '记录', '获取', '设置', '配置',
+    '添加', '移除', '编辑', '保存', '提交', '取消', '批量', '导入',
+    '导出', '上传', '下载', '查看', '审批', '执行', '同步', '验证',
+    '校验', '检查', '确认', '审核', '通过', '拒绝', '撤销', '终止',
+    '暂停', '恢复', '重启', '刷新', '加载', '解析', '转换', '生成',
+    '计算', '统计', '汇总', '分析', '处理', '发送', '推送', '通知'
+  ];
+
+  // 对表格的最后一列（数据属性列）进行动词过滤
+  const finalLines = cleaned.split('\n');
+  const verbFilteredLines = finalLines.map(line => {
+    if (!line.startsWith('|') || line.includes('---') || line.includes('数据属性')) return line;
+
+    const cols = line.split('|');
+    if (cols.length >= 8) {
+      // 最后一列是数据属性（索引7，因为split后第一个是空的）
+      let dataAttrs = cols[7] || '';
+      const attrFields = dataAttrs.split(/[、,，]/).map(f => f.trim()).filter(f => f);
+
+      const cleanedFields = attrFields.map(field => {
+        let cleanField = field;
+        // 检查字段是否以动词开头，如果是则移除
+        for (const verb of verbBlacklist) {
+          if (cleanField.startsWith(verb)) {
+            cleanField = cleanField.substring(verb.length);
+            // 如果移除后为空或只剩一个字，则保留原样
+            if (cleanField.length <= 1) {
+              cleanField = field;
+            }
+            break; // 只移除第一个匹配的动词
+          }
+        }
+        return cleanField;
+      });
+
+      // 去除重复字段（动词移除后可能导致重复）
+      const uniqueFields = [...new Set(cleanedFields)];
+      cols[7] = uniqueFields.join('、');
+      return cols.join('|');
+    }
+    return line;
+  });
+
+  cleaned = verbFilteredLines.join('\n');
+
+  console.log('三层分析框架 - 数据清洗完成（无省略号，已过滤动词前缀）');
   return cleaned;
 }
 
