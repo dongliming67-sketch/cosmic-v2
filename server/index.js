@@ -2275,6 +2275,51 @@ ${functionProcessList}
         console.log(`✓ 所有子过程描述格式均正确`);
       }
 
+      // 【新增】步骤3.6：清理数据组中的分隔符（连接符"-"和中文间隔号"·"）
+      console.log('\n⏳ 步骤3.6：清理数据组分隔符（连接符和间隔号）...');
+      let dataGroupFixedCount = 0;
+      tableData = tableData.map(row => {
+        let dataGroup = row.dataGroup || '';
+        const originalGroup = dataGroup;
+
+        // 检测并修复分隔符问题：支持连接符"-"和中文间隔号"·"
+        const separatorPattern = /[·\-]/;
+        if (separatorPattern.test(dataGroup) && (dataGroup.includes('表') || dataGroup.includes('库') || dataGroup.includes('集') || dataGroup.includes('数据'))) {
+          // 匹配"xxx表·动作"或"xxx表-动作"格式
+          const separatorMatch = dataGroup.match(/^(.+?(?:表|库|集|数据))[·\-](.+)$/);
+          if (separatorMatch) {
+            const baseName = separatorMatch[1]; // xxx表/库/集/数据
+            const suffix = separatorMatch[2]; // 分隔符后的内容
+
+            // 检测后缀是否包含动词，如果是则只保留基础名
+            const verbPatterns = /^(读取|写入|查询|删除|修改|新增|导出|导入|获取|接收|返回|保存|更新|执行|存储|校验|进行)/;
+            if (verbPatterns.test(suffix) || suffix.length > 15) {
+              // 分隔符后是动词或后缀过长，直接使用基础名
+              dataGroup = baseName;
+            } else {
+              // 后缀不是动词开头且长度适中，拼接为更自然的表达
+              const baseWithoutSuffix = baseName.replace(/表$|库$|集$/, '');
+              dataGroup = baseWithoutSuffix + suffix + '表';
+            }
+          } else {
+            // 其他情况，直接移除分隔符及其后内容
+            dataGroup = dataGroup.split(/[·\-]/)[0].trim();
+          }
+
+          if (originalGroup !== dataGroup) {
+            console.log(`🔧 数据组分隔符清理: "${originalGroup}" -> "${dataGroup}"`);
+            dataGroupFixedCount++;
+          }
+        }
+
+        return { ...row, dataGroup };
+      });
+      if (dataGroupFixedCount > 0) {
+        console.log(`✓ 清理了 ${dataGroupFixedCount} 个数据组的分隔符问题`);
+      } else {
+        console.log(`✓ 数据组格式均正确，无需清理`);
+      }
+
       // 移除内部字段
       console.log('\n⏳ 步骤4：清理内部字段...');
       tableData = tableData.map(row => {

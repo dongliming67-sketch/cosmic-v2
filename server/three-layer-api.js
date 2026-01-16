@@ -898,6 +898,91 @@ function cleanupAIResponse(reply) {
 
   cleaned = processedLines.join('\n');
 
+  // 4.5【新增】清理数据组中的连接符（如"表-xxx"、"表·xxx"）和过滤笼统功能过程
+  // 问题：AI有时会生成"低空保障参数自动化任务运行日志表-读取低空保障任务"或使用"·"中文间隔号
+  // 解决：将连接符/间隔号替换为更自然的表达，或直接移除分隔符后的部分
+  const cleanupDataGroupLines = cleaned.split('\n');
+  const cleanedDataGroupLines = cleanupDataGroupLines.map(line => {
+    if (!line.startsWith('|') || line.includes('---') || line.includes('数据组')) return line;
+
+    const cols = line.split('|');
+    if (cols.length >= 7) {
+      // 第6列是数据组（索引6，因为split后第一个是空的）
+      let dataGroup = cols[6] || '';
+      const originalGroup = dataGroup;
+
+      // 检测并修复分隔符问题：支持连接符"-"和中文间隔号"·"
+      // 匹配模式：xxx表-xxx 或 xxx表·xxx
+      const separatorPattern = /[·\-]/;
+      if (separatorPattern.test(dataGroup) && (dataGroup.includes('表') || dataGroup.includes('库') || dataGroup.includes('集') || dataGroup.includes('数据'))) {
+        // 方案1：如果是"xxx表-动作"或"xxx表·动作"格式，提取基础名
+        const separatorMatch = dataGroup.match(/^(.+?(?:表|库|集|数据))[·\-](.+)$/);
+        if (separatorMatch) {
+          const baseName = separatorMatch[1]; // xxx表/库/集/数据
+          const suffix = separatorMatch[2]; // 分隔符后的内容
+
+          // 检测后缀是否包含动词，如果是则只保留基础名
+          const verbPatterns = /^(读取|写入|查询|删除|修改|新增|导出|导入|获取|接收|返回|保存|更新|执行)/;
+          if (verbPatterns.test(suffix)) {
+            // 分隔符后是动词，直接使用基础名
+            dataGroup = baseName;
+          } else if (suffix.length > 15) {
+            // 后缀过长（可能是截断的内容），只保留基础名
+            dataGroup = baseName;
+          } else {
+            // 后缀不是动词开头且长度适中，拼接为更自然的表达
+            // 移除末尾的"表/库/集"后重新组合
+            const baseWithoutSuffix = baseName.replace(/表$|库$|集$/, '');
+            dataGroup = baseWithoutSuffix + suffix + '表';
+          }
+        } else {
+          // 其他情况，直接移除分隔符及其后内容
+          dataGroup = dataGroup.split(/[·\-]/)[0].trim();
+        }
+
+        if (originalGroup !== dataGroup) {
+          console.log(`🔧 数据组分隔符清理: "${originalGroup}" -> "${dataGroup}"`);
+        }
+      }
+
+      // 第3列是功能过程（索引3）
+      let funcProcess = cols[3] || '';
+
+      // 检测并警告笼统的功能过程（如"查询结果"、"数据处理"等）
+      const vagueFuncPatterns = [
+        /^查询结果$/,
+        /^数据处理$/,
+        /^信息查询$/,
+        /^结果展示$/,
+        /^数据查询$/,
+        /^任务处理$/,
+        /^操作执行$/,
+        /^请求处理$/
+      ];
+
+      if (funcProcess.trim()) {
+        const isVague = vagueFuncPatterns.some(pattern => pattern.test(funcProcess.trim()));
+        if (isVague) {
+          console.log(`⚠️ 警告：检测到笼统功能过程: "${funcProcess}"，建议增加业务场景描述`);
+          // 尝试从子过程描述中提取业务关键词来增强
+          const subProcessDesc = cols[4] || '';
+          const businessKeywords = subProcessDesc.match(/(低空保障|参数自动化|质差|健康度|告警|工单|航线|飞行|任务配置|规则|监控|统计|分析)/);
+          if (businessKeywords && businessKeywords[1]) {
+            funcProcess = businessKeywords[1] + funcProcess;
+            console.log(`  → 已增强为: "${funcProcess}"`);
+          }
+        }
+      }
+
+      cols[6] = dataGroup;
+      cols[3] = funcProcess;
+      return cols.join('|');
+    }
+    return line;
+  });
+
+  cleaned = cleanedDataGroupLines.join('\n');
+
   // 5. 【极重要】过滤数据属性中的动词前缀，去重后补充标准字段
   // 动词黑名单：这些词不应该出现在数据属性字段名中
   const verbBlacklist = [

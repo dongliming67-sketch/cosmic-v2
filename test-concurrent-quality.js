@@ -227,6 +227,57 @@ async function analyzeResults(results) {
         });
     }
 
+    // =================== 新增：数据组连接符问题检查 ===================
+    console.log('\n\n🔍 【新增检查：数据组连接符问题】');
+    console.log('='.repeat(60));
+
+    const dataGroupsForHyphen = tableData.map(r => r.dataGroup);
+    const hyphenDataGroups = dataGroupsForHyphen.filter(dg => {
+        if (!dg) return false;
+        // 检测是否包含"表-xxx"、"库-xxx"、"数据-xxx"等连接符模式，或中文间隔号"·"
+        return /表-|库-|数据-|集-|表·|库·|数据·|集·/.test(dg);
+    });
+
+    if (hyphenDataGroups.length > 0) {
+        console.log(`\n⚠️ 发现 ${hyphenDataGroups.length} 个数据组包含连接符:`);
+        const uniqueHyphenGroups = [...new Set(hyphenDataGroups)].slice(0, 10);
+        uniqueHyphenGroups.forEach((dg, i) => {
+            console.log(`  ${i + 1}. ❌ "${dg}"`);
+        });
+        console.log(`\n💡 建议: 将连接符改为更自然的表达，如"xxx查询表"、"xxx导出表"等`);
+    } else {
+        console.log(`\n✅ 数据组中没有发现连接符问题，清理成功！`);
+    }
+
+    // =================== 新增：笼统功能过程检查 ===================
+    console.log('\n\n🔍 【新增检查：笼统功能过程】');
+    console.log('='.repeat(60));
+
+    const vagueFPPatterns = [
+        /^查询结果$/,
+        /^数据处理$/,
+        /^信息查询$/,
+        /^结果展示$/,
+        /^数据查询$/,
+        /^任务处理$/,
+        /^操作执行$/,
+        /^请求处理$/
+    ];
+
+    const vagueFPs = functionalProcesses.filter(fp => {
+        if (!fp) return false;
+        return vagueFPPatterns.some(p => p.test(fp.trim()));
+    });
+
+    if (vagueFPs.length > 0) {
+        console.log(`\n⚠️ 发现 ${vagueFPs.length} 个极其笼统的功能过程:`);
+        vagueFPs.forEach((fp, i) => {
+            console.log(`  ${i + 1}. ❌ "${fp}" (需要补充具体业务场景)`);
+        });
+    } else {
+        console.log(`\n✅ 没有发现极其笼统的功能过程，质量良好！`);
+    }
+
     // =================== 问题2：子过程描述检查 ===================
     console.log('\n\n🔍 【问题2：子过程描述检查】');
     console.log('='.repeat(60));
