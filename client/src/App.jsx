@@ -3007,10 +3007,10 @@ ${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能
                     <p className="font-semibold text-orange-800 mb-1">2. 填写邀请码（重点！）</p>
                     <p className="mb-2">准确填入专属代码，即可激活新手福利代金券：</p>
                     <div className="flex items-center gap-2 bg-white border border-orange-200 p-2 rounded-lg">
-                      <code className="text-[#D97757] font-bold flex-1 break-all">W202511301022310082000700854344</code>
+                      <code className="text-[#D97757] font-bold flex-1 break-all">hjykesQJ</code>
                       <button
                         onClick={() => {
-                          navigator.clipboard.writeText('W202511301022310082000700854344');
+                          navigator.clipboard.writeText('hjykesQJ');
                           showToast('邀请码已复制');
                         }}
                         className="p-1.5 hover:bg-orange-100 rounded text-orange-600 transition-colors"
