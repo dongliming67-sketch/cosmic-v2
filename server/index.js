@@ -1712,176 +1712,130 @@ app.post('/api/two-step/cosmic-split', async (req, res) => {
 
     const { client, model, useGeminiSDK } = clientConfig;
 
-    // 强化提示词，添加深度思考模式和严格格式约束
-    const enhancedPrompt = `# 【深度思考模式】COSMIC功能拆分
+    // 【新增】分批处理逻辑 - 当功能过程超过5个时，分成多批处理
+    const BATCH_SIZE = 5; // 每批处理5个功能过程
+    const needsBatching = extractedFunctions.length > BATCH_SIZE;
+
+    // 将功能过程列表按格式分块
+    const splitFunctionListIntoBatches = (fullList, batchSize) => {
+      // 按功能模块分割
+      const sections = fullList.split(/(?=^#[^#])/m).filter(s => s.trim());
+      const batches = [];
+      let currentBatch = [];
+      let currentCount = 0;
+
+      for (const section of sections) {
+        // 计算这个section中有多少个功能过程
+        const fpCount = (section.match(/##功能过程/g) || []).length;
+
+        if (currentCount + fpCount > batchSize && currentBatch.length > 0) {
+          // 当前批次已满，保存并开始新批次
+          batches.push(currentBatch.join('\n\n'));
+          currentBatch = [section];
+          currentCount = fpCount;
+        } else {
+          currentBatch.push(section);
+          currentCount += fpCount;
+        }
+      }
+
+      if (currentBatch.length > 0) {
+        batches.push(currentBatch.join('\n\n'));
+      }
+
+      return batches;
+    };
+
+    // 如果不需要分批，或者分批后仍然只有一个批次，直接使用原来的逻辑
+    const batches = needsBatching ? splitFunctionListIntoBatches(functionProcessList, BATCH_SIZE) : [functionProcessList];
+    console.log(`\n📦 分批处理: 共 ${batches.length} 批次`);
+    if (needsBatching) {
+      batches.forEach((batch, idx) => {
+        const batchFpCount = (batch.match(/##功能过程/g) || []).length;
+        console.log(`   批次${idx + 1}: ${batchFpCount} 个功能过程`);
+      });
+    }
+
+    // 【核心函数】为单个批次生成提示词
+    const generatePromptForBatch = (batchContent, batchIndex, totalBatches) => {
+      return `# 【深度思考模式】COSMIC功能拆分 - 第${batchIndex + 1}/${totalBatches}批
 
 请在正式输出之前，进行深度思考和分析。这是COSMIC功能点拆分的第二步，需要严格按照COSMIC方法论进行拆分。
-
-## 深度思考任务
-1. **理解功能过程**：仔细分析每个功能过程的业务目标和数据流
-2. **识别数据移动**：确定每个功能过程的E(入口)→R(读取)→W(写入)→X(出口)链路
-3. **选择合适的数据组**：根据业务对象确定每个子过程操作的数据集合
-4. **生成数据属性**：从业务角度思考每个数据组需要的具体字段
-
----
 
 ${STEP2_COSMIC_SPLIT_PROMPT}
 
 ---
 
-## 【极重要】子过程描述业务化规范（必须严格遵守！）
-
-### 核心原则：子过程描述必须包含功能过程的业务关键词
-- **每个子过程描述在整个表格中必须唯一，不能重复！**
-- **必须将功能过程的业务关键词融入子过程描述中**
-- **禁止使用过于简单的通用描述**
-
-### 子过程描述命名公式
-- E类型：接收 + [业务对象] + [操作类型] + 请求
-- R类型：读取 + [业务对象] + [数据类型] + 数据/配置
-- W类型：记录 + [业务对象] + [操作类型] + 日志/结果
-- X类型：返回 + [业务对象] + [操作类型] + 结果
-
-### 正确示例（请模仿这种格式）
-假设功能过程是"查询华为小区质差数据"：
-| 数据移动类型 | 子过程描述示例 |
-|---|---|
-| E | 接收华为小区质差查询请求 |
-| R | 读取华为小区质差配置规则 |
-| W | 记录华为小区质差查询日志 |
-| X | 返回华为小区质差查询结果 |
-
-假设功能过程是"导出中兴小区指标报表"：
-| 数据移动类型 | 子过程描述示例 |
-|---|---|
-| E | 接收中兴小区指标导出请求 |
-| R | 读取中兴小区指标数据表 |
-| W | 生成中兴小区指标导出文件 |
-| X | 返回中兴小区指标导出结果 |
-
-### 错误示例（禁止这样写）
-- ❌ "接收请求参数" （太简单，没有业务关键词）
-- ❌ "读取数据" （太简单，没有业务关键词）
-- ❌ "写入结果" （太简单，没有业务关键词）
-- ❌ "返回结果" （太简单，没有业务关键词）
-- ❌ "从中兴小区级智网指标-日报析数据中读取数据" （太长）
-
----
-
-## 【极重要】数据属性唯一性规范（必须严格遵守！）
-
-### 重合度检测机制
-**系统将自动检测数据属性的重合度（阈值15%），即使只有15%的字段重复也会触发差异化处理！**
-- 重合度 = 重叠字段数 / 较小集合的大小
-- 示例：[小区标识、小区名称、统计时间] vs [小区标识、质差等级、判定时间] → 重合度 = 1/3 = 33% > 15% → **触发去重！**
-- **因此，你必须在生成时就确保每个功能过程的数据属性高度差异化！**
-
-### 禁止生硬去重
-**严禁使用以下方式强行去重**：
-- ❌ 添加无意义后缀："小区标识1"、"小区标识2"
-- ❌ 添加校验码后缀："xxx校验码123"、"xxx校验码456"
-- ❌ 添加随机编号："数据编号A"、"数据编号B"
-
-### 正确做法：基于业务差异化
-- ✅ 根据功能过程的业务关键词生成差异化字段
-- ✅ 不同数据移动类型使用不同粒度的字段：
-  - E（入口）：请求标识、操作流水、会话追踪、业务优先级
-  - R（读取）：数据版本、源标识、时效性标签、关联实体数
-  - W（写入）：事务码、记录ID、写入分区号、变更轨迹ID
-  - X（出口）：响应序列、处理回执、分页游标、刷新凭证
-
-### 数据属性格式规范
-1. **分隔符**：必须使用中文顿号"、"分隔，禁止使用逗号","
-2. **语言**：必须使用中文，禁止使用英文字段名如cell_id
-3. **数量**：至少3个属性，最多8个属性
-4. **示例**：华为小区标识、质差门限值、统计日期、计算结果、状态标识
-
-### 差异化策略（极重要！）
-**为了确保数据属性重合度小于15%，你必须采用以下策略**：
-1. **业务关键词前缀化**：将功能过程的关键词融入每个字段
-   - 功能："查询华为小区质差数据" → 字段：华为质差请求标识、华为小区质差门限、华为质差判定规则
-2. **ERWX类型特定字段**：根据数据移动类型选择完全不同的字段集
-   - E使用：请求类字段（请求标识、操作流水、会话追踪）
-   - R使用：配置类字段（数据版本、源标识、时效性标签）
-   - W使用：记录类字段（事务码、记录ID、变更轨迹ID）
-   - X使用：响应类字段（响应序列、处理回执、分页游标）
-3. **维度字段补充**：添加厂商、业务、网络、时间、地域等维度字段
-   - 厂商：华为厂商标识、中兴厂商标识
-   - 网络：4G网络类型、5G网络类型
-   - 时间：小时粒度、日粒度、周粒度
-
----
-
-## 输入内容（功能过程列表）
+## 输入内容（功能过程列表 - 第${batchIndex + 1}批）
 \`\`\`
-${functionProcessList}
+${batchContent}
 \`\`\`
 
 ---
 
-## 【极重要】功能过程唯一性要求
+## 【极重要】必须为每个功能过程生成完整的ERWX拆分
 
-**输入的功能过程列表中包含多个不同的功能，你必须为每个功能保持其原有的功能过程名称！**
+**这一批次包含上述功能过程，你必须为每一个功能过程都生成完整的E→R→W→X拆分！**
 
-- ✅ 正确做法：如果输入列表有"查询小区数据"、"导出指标报表"、"新增配置规则"三个功能，输出中也应该有这三个不同的功能过程
-- ❌ 错误做法：把所有功能都拆成同一个功能过程名称（如全部叫"查询小区数据"）
+1. 仔细阅读每个功能过程的名称和描述
+2. 为每个功能过程生成1个E + 至少1个R + 至少1个W + 1个X
+3. 确保每个功能过程都在输出表格中有对应的行
 
-**必须严格遵守**：
-1. 输入列表有N个不同的功能过程，输出表格中就应该有N个不同的功能过程
-2. 每个功能过程名称必须与输入列表中的对应功能一致
-3. 不要合并不同的功能，不要重复相同的功能过程名称
+**绝对禁止**：
+- ❌ 只处理第一个功能过程，忽略其他功能过程
+- ❌ 将多个功能过程合并成一个
+- ❌ 输出不完整的表格
 
----
-
-## 输出格式（必须严格按照此格式输出）
-
-**示例1**：如果输入包含"查询华为小区质差数据"这个功能
-
-\`\`\`markdown
+## 输出格式
+请输出一个完整的Markdown表格，格式如下：
 |功能用户|触发事件|功能过程|子过程描述|数据移动类型|数据组|数据属性|
 |:---|:---|:---|:---|:---|:---|:---|
-|发起者：用户 接收者：用户|用户触发|查询华为小区质差数据|接收华为小区质差查询请求|E|华为小区质差查询请求|华为质差请求标识、查询条件、时间范围、用户标识|
-||||读取华为小区质差配置规则|R|华为小区质差配置表|华为小区标识、质差门限值、判定规则、配置版本|
-||||记录华为小区质差查询日志|W|华为小区质差查询日志|查询日志ID、操作时间、查询耗时、结果数量|
-||||返回华为小区质差查询结果|X|华为小区质差查询结果|质差数据列表、统计汇总、响应状态码、处理时间|
-\`\`\`
+|发起者：用户 接收者：用户|用户触发|功能过程名称|接收xxx请求|E|xxx请求|字段1、字段2、字段3|
+||||读取xxx数据|R|xxx表|字段1、字段2、字段3|
+||||记录xxx结果|W|xxx日志|字段1、字段2、字段3|
+||||返回xxx结果|X|xxx响应|字段1、字段2、字段3|
 
-**示例2**：如果输入包含"导出中兴小区指标报表"这个功能
+现在请开始拆分！`;
+    };
 
-\`\`\`markdown
-|功能用户|触发事件|功能过程|子过程描述|数据移动类型|数据组|数据属性|
-|:---|:---|:---|:---|:---|:---|:---|
-|发起者：用户 接收者：用户|用户触发|导出中兴小区指标报表|接收中兴小区指标导出请求|E|中兴小区指标导出请求|中兴指标导出标识、导出范围、文件格式|
-||||读取中兴小区指标数据表|R|中兴小区指标数据表|中兴小区标识、指标名称、指标值、统计时间|
-||||生成中兴小区指标导出文件|W|中兴小区指标导出文件|导出文件路径、文件大小、生成时间|
-||||返回中兴小区指标导出结果|X|中兴小区指标导出响应|导出文件链接、导出状态、完成时间|
-\`\`\`
+    // 【分批调用AI】
+    let allReplies = [];
+    for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
+      const batchContent = batches[batchIdx];
+      const batchFpCount = (batchContent.match(/##功能过程/g) || []).length;
 
-**注意**：以上只是示例格式，实际输出时必须根据输入的功能过程列表生成对应的表格，每个功能一个独立的ERWX流程！
+      console.log(`\n🔄 处理批次 ${batchIdx + 1}/${batches.length} (包含 ${batchFpCount} 个功能过程)...`);
 
-现在请开始深度分析并输出COSMIC拆分表格。**记住：输入有多少个不同的功能过程，输出就应该有多少个不同的功能过程！**`;
+      const batchPrompt = generatePromptForBatch(batchContent, batchIdx, batches.length);
 
-    let reply = '';
+      let batchReply = '';
+      if (useGeminiSDK) {
+        const result = await client.generateContent(batchPrompt);
+        const response = await result.response;
+        batchReply = response.text();
+      } else {
+        const completion = await client.chat.completions.create({
+          model,
+          messages: [{ role: 'user', content: batchPrompt }],
+          temperature: 0.5,
+          max_tokens: 16000
+        });
+        batchReply = completion.choices[0].message.content;
+      }
 
-    if (useGeminiSDK) {
-      const result = await client.generateContent(enhancedPrompt);
-      const response = await result.response;
-      reply = response.text();
-    } else {
-      const completion = await client.chat.completions.create({
-        model,
-        messages: [{ role: 'user', content: enhancedPrompt }],
-        temperature: 0.5,  // 降低temperature提高格式规范性
-        max_tokens: 16000
-      });
-      reply = completion.choices[0].message.content;
+      console.log(`   ✅ 批次 ${batchIdx + 1} 完成，结果长度: ${batchReply.length}`);
+      allReplies.push(batchReply);
     }
 
+    // 合并所有批次的结果
+    const reply = allReplies.join('\n\n');
+    console.log(`\n📊 所有批次处理完成，合并后总长度: ${reply.length}`);
+
     console.log('✅ COSMIC拆分完成');
-    console.log('结果长度:', reply.length);
 
     // ========== 完整的表格解析逻辑（与主流程一致） ==========
     let tableData = [];
+
 
     // 清理文本的辅助函数
     const sanitizeText = (text) => {
@@ -2089,125 +2043,136 @@ ${functionProcessList}
     };
 
     try {
-      // 查找表格
-      const tableMatch = reply.match(/\|[^\n]+\|[\s\S]*?(?=\n\n|\n```|$)/);
-      if (tableMatch) {
-        const tableText = tableMatch[0];
-        const lines = tableText.trim().split('\n').filter(line => line.includes('|'));
+      // 【关键修复】逐个批次解析回复，确保不遗漏任何数据
+      const tableRegex = /\|[^\n]+\|[\s\n]+\|[-:| ]+\|[\s\S]+?(?=\n\s*(?!\|)|$)/g;
 
-        // 跳过表头和分隔行
-        const dataLines = lines.filter((line, idx) => idx >= 2 && !line.includes('---') && !line.includes(':---'));
+      let currentFunctionalUser = '';
+      let currentTriggerEvent = '';
+      let currentFunctionalProcess = '';
 
-        let currentFunctionalUser = '';
-        let currentTriggerEvent = '';
-        let currentFunctionalProcess = '';
+      console.log(`🔍 开始解析 ${allReplies.length} 个批次的回复...`);
 
-        for (const line of dataLines) {
-          const cells = line.split('|').map(c => c.trim()).filter((_, idx, arr) => idx > 0 && idx < arr.length);
+      for (let i = 0; i < allReplies.length; i++) {
+        const singleReply = allReplies[i];
+        const allTableMatches = Array.from(singleReply.matchAll(tableRegex));
 
-          if (cells.length < 4) continue;
+        console.log(`   批次 ${i + 1}: 识别到 ${allTableMatches.length} 个表格块`);
 
-          // 解析各列（处理合并单元格情况）
-          let functionalUser = cells[0] || '';
-          let triggerEvent = cells[1] || '';
-          let functionalProcess = cells[2] || '';
-          let subProcessDesc = cells[3] || '';
-          let dataMovementType = (cells[4] || '').toUpperCase();
-          let dataGroup = cells[5] || '';
-          let dataAttributes = cells[6] || '';
+        for (const tableMatch of allTableMatches) {
+          const tableText = tableMatch[0];
+          const lines = tableText.trim().split('\n').filter(line => line.includes('|'));
 
-          // 处理数据移动类型识别
-          const moveSet = new Set(['E', 'R', 'W', 'X']);
-          if (!moveSet.has(dataMovementType)) {
-            const idx = cells.findIndex(cell => moveSet.has((cell || '').toUpperCase()));
-            if (idx !== -1) {
-              dataMovementType = (cells[idx] || '').toUpperCase();
-              subProcessDesc = cells[idx - 1] || subProcessDesc;
-              dataGroup = cells[idx + 1] || dataGroup;
-              dataAttributes = cells.slice(idx + 2).filter(Boolean).join('、') || dataAttributes;
-            }
-          }
+          // 跳过表头和分隔行
+          const dataLines = lines.filter((line, idx) => idx >= 2 && !line.includes('---') && !line.includes(':---'));
 
-          // 更新当前功能过程（处理合并单元格）
-          if (functionalProcess) {
-            currentFunctionalProcess = sanitizeText(functionalProcess);
-          }
-          if (functionalUser && triggerEvent) {
-            const normalized = normalizeUserTrigger(functionalUser, triggerEvent, currentFunctionalProcess);
-            currentFunctionalUser = normalized.user;
-            currentTriggerEvent = normalized.trigger;
-          } else if (currentFunctionalProcess && dataMovementType === 'E') {
-            const normalized = normalizeUserTrigger('', '', currentFunctionalProcess);
-            currentFunctionalUser = normalized.user;
-            currentTriggerEvent = normalized.trigger;
-          }
+          for (const line of dataLines) {
 
+            const cells = line.split('|').map(c => c.trim()).filter((_, idx, arr) => idx > 0 && idx < arr.length);
 
-          // 清理和规范化各字段
-          subProcessDesc = sanitizeText(subProcessDesc);
+            if (cells.length < 4) continue;
 
-          // 【关键修复】验证子过程描述格式，如果无效则自动修正
-          if (isInvalidSubProcessDesc(subProcessDesc)) {
-            const originalDesc = subProcessDesc;
-            subProcessDesc = regenerateSubProcessDesc(originalDesc, currentFunctionalProcess, dataMovementType);
-            console.log(`🔧 修正子过程描述: "${originalDesc}" → "${subProcessDesc}"`);
-          } else {
-            subProcessDesc = simplifySubProcessDesc(subProcessDesc);
-          }
+            // 解析各列（处理合并单元格情况）
+            let functionalUser = cells[0] || '';
+            let triggerEvent = cells[1] || '';
+            let functionalProcess = cells[2] || '';
+            let subProcessDesc = cells[3] || '';
+            let dataMovementType = (cells[4] || '').toUpperCase();
+            let dataGroup = cells[5] || '';
+            let dataAttributes = cells[6] || '';
 
-          dataGroup = sanitizeText(dataGroup);
-
-          // 【关键修复】优化数据组名称：移除冗余动词前缀，保持名词性
-          const cleanDataGroupName = (name) => {
-            if (!name) return name;
-            const verbs = ['查询', '创建', '删除', '修改', '编辑', '导出', '导入', '统计', '配置', '处理', '执行', '新增', '更新', '生成', '返回', '获取', '同步', '汇总', '查看'];
-            let cleaned = name;
-            for (const verb of verbs) {
-              if (cleaned.startsWith(verb)) {
-                cleaned = cleaned.replace(verb, '');
+            // 处理数据移动类型识别
+            const moveSet = new Set(['E', 'R', 'W', 'X']);
+            if (!moveSet.has(dataMovementType)) {
+              const idx = cells.findIndex(cell => moveSet.has((cell || '').toUpperCase()));
+              if (idx !== -1) {
+                dataMovementType = (cells[idx] || '').toUpperCase();
+                subProcessDesc = cells[idx - 1] || subProcessDesc;
+                dataGroup = cells[idx + 1] || dataGroup;
+                dataAttributes = cells.slice(idx + 2).filter(Boolean).join('、') || dataAttributes;
               }
             }
-            return cleaned.replace(/^[·：:、 ]+/, '').trim() || name;
-          };
-          dataGroup = cleanDataGroupName(dataGroup);
 
-          dataAttributes = sanitizeText(dataAttributes);
-          dataAttributes = cleanDataAttributes(dataAttributes, dataMovementType);
+            // 更新当前功能过程（处理合并单元格）
+            if (functionalProcess) {
+              currentFunctionalProcess = sanitizeText(functionalProcess);
+            }
+            if (functionalUser && triggerEvent) {
+              const normalized = normalizeUserTrigger(functionalUser, triggerEvent, currentFunctionalProcess);
+              currentFunctionalUser = normalized.user;
+              currentTriggerEvent = normalized.trigger;
+            } else if (currentFunctionalProcess && dataMovementType === 'E') {
+              const normalized = normalizeUserTrigger('', '', currentFunctionalProcess);
+              currentFunctionalUser = normalized.user;
+              currentTriggerEvent = normalized.trigger;
+            }
 
-          // 补全缺失的数据组
-          if (!dataGroup && currentFunctionalProcess) {
-            dataGroup = `${currentFunctionalProcess.slice(0, 6)}·${subProcessDesc.slice(0, 4)}数据`;
-          }
 
-          // 【关键修复】数据属性智能补全：如果属性少于3个，或与数据组高度重合（AI混淆），执行智能扩展
-          const attrFields = (dataAttributes || '').split(/[、,，]/).filter(f => f.trim().length >= 1);
-          const groupStr = (dataGroup || '').toLowerCase().trim();
-          const attrStr = (dataAttributes || '').toLowerCase().trim();
+            // 清理和规范化各字段
+            subProcessDesc = sanitizeText(subProcessDesc);
 
-          if (!dataAttributes || attrFields.length < 3 || (groupStr && attrStr && (groupStr === attrStr || groupStr.includes(attrStr) || attrStr.includes(groupStr)))) {
-            console.log(`🔍 识别到属性过少或内容可能错误 (Count: ${attrFields.length}, Val: "${dataAttributes}")，开始智能补全...`);
-            dataAttributes = await generateUniqueAttrString(
-              dataAttributes || '',
+            // 【关键修复】验证子过程描述格式，如果无效则自动修正
+            if (isInvalidSubProcessDesc(subProcessDesc)) {
+              const originalDesc = subProcessDesc;
+              subProcessDesc = regenerateSubProcessDesc(originalDesc, currentFunctionalProcess, dataMovementType);
+              console.log(`🔧 修正子过程描述: "${originalDesc}" → "${subProcessDesc}"`);
+            } else {
+              subProcessDesc = simplifySubProcessDesc(subProcessDesc);
+            }
+
+            dataGroup = sanitizeText(dataGroup);
+
+            // 【关键修复】优化数据组名称：移除冗余动词前缀，保持名词性
+            const cleanDataGroupName = (name) => {
+              if (!name) return name;
+              const verbs = ['查询', '创建', '删除', '修改', '编辑', '导出', '导入', '统计', '配置', '处理', '执行', '新增', '更新', '生成', '返回', '获取', '同步', '汇总', '查看'];
+              let cleaned = name;
+              for (const verb of verbs) {
+                if (cleaned.startsWith(verb)) {
+                  cleaned = cleaned.replace(verb, '');
+                }
+              }
+              return cleaned.replace(/^[·：:、 ]+/, '').trim() || name;
+            };
+            dataGroup = cleanDataGroupName(dataGroup);
+
+            dataAttributes = sanitizeText(dataAttributes);
+            dataAttributes = cleanDataAttributes(dataAttributes, dataMovementType);
+
+            // 补全缺失的数据组
+            if (!dataGroup && currentFunctionalProcess) {
+              dataGroup = `${currentFunctionalProcess.slice(0, 6)}·${subProcessDesc.slice(0, 4)}数据`;
+            }
+
+            // 【关键修复】数据属性智能补全：如果属性少于3个，或与数据组高度重合（AI混淆），执行智能扩展
+            const attrFields = (dataAttributes || '').split(/[、,，]/).filter(f => f.trim().length >= 1);
+            const groupStr = (dataGroup || '').toLowerCase().trim();
+            const attrStr = (dataAttributes || '').toLowerCase().trim();
+
+            if (!dataAttributes || attrFields.length < 3 || (groupStr && attrStr && (groupStr === attrStr || groupStr.includes(attrStr) || attrStr.includes(groupStr)))) {
+              console.log(`🔍 识别到属性过少或内容可能错误 (Count: ${attrFields.length}, Val: "${dataAttributes}")，开始智能补全...`);
+              dataAttributes = await generateUniqueAttrString(
+                dataAttributes || '',
+                subProcessDesc,
+                currentFunctionalProcess,
+                [],
+                dataGroup,
+                0
+              );
+            }
+
+            tableData.push({
+              functionalUser: dataMovementType === 'E' ? currentFunctionalUser : '',
+              triggerEvent: dataMovementType === 'E' ? currentTriggerEvent : '',
+              functionalProcess: dataMovementType === 'E' ? currentFunctionalProcess : '',
               subProcessDesc,
-              currentFunctionalProcess,
-              [],
+              dataMovementType,
               dataGroup,
-              0
-            );
-          }
-
-          tableData.push({
-            functionalUser: dataMovementType === 'E' ? currentFunctionalUser : '',
-            triggerEvent: dataMovementType === 'E' ? currentTriggerEvent : '',
-            functionalProcess: dataMovementType === 'E' ? currentFunctionalProcess : '',
-            subProcessDesc,
-            dataMovementType,
-            dataGroup,
-            dataAttributes,
-            _parentProcess: currentFunctionalProcess  // 内部使用
-          });
-        }
-      }
+              dataAttributes,
+              _parentProcess: currentFunctionalProcess  // 内部使用
+            });
+          } // end for dataLines
+        } // end for tableMatches
+      } // end for allReplies
     } catch (parseError) {
       console.error('表格解析失败:', parseError);
     }
