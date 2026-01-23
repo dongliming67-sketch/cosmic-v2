@@ -1516,6 +1516,54 @@ const cleanDataAttributes = (attrs, dataMovementType = '') => {
   return fields.join('、');
 };
 
+// 智能文档分块辅助函数
+function smartChunkDocument(content, maxChunkSize = 6000) {
+  const chunks = [];
+  if (!content) return [];
+  if (content.length <= maxChunkSize) {
+    return [{ content, index: 1, total: 1 }];
+  }
+
+  // 优先按双换行(段落)分割
+  const paragraphs = content.split(/\n\s*\n/);
+  let currentChunk = '';
+
+  for (const para of paragraphs) {
+    // 如果单个段落就超长，强制截断（罕见情况）
+    if (para.length > maxChunkSize) {
+      if (currentChunk) {
+        chunks.push({ content: currentChunk });
+        currentChunk = '';
+      }
+      // 暴力切分
+      for (let i = 0; i < para.length; i += maxChunkSize) {
+        chunks.push({ content: para.substring(i, i + maxChunkSize) });
+      }
+    } else if (currentChunk.length + para.length > maxChunkSize && currentChunk.length > 500) {
+      // 当前块已满，保存
+      chunks.push({ content: currentChunk });
+      currentChunk = para;
+    } else {
+      // 累加到当前块
+      currentChunk += (currentChunk ? '\n\n' : '') + para;
+    }
+  }
+
+  if (currentChunk) {
+    chunks.push({ content: currentChunk });
+  }
+
+  // 添加重叠上下文 (Overlap) - 取下一块的前800字符添加到本块末尾
+  // 这能防止功能过程描述在切分点被截断
+  for (let i = 0; i < chunks.length - 1; i++) {
+    const nextContent = chunks[i + 1].content;
+    const overlap = nextContent.substring(0, Math.min(800, nextContent.length));
+    chunks[i].content += '\n\n' + overlap;
+  }
+
+  return chunks.map((c, i) => ({ ...c, index: i + 1, total: chunks.length }));
+}
+
 app.post('/api/two-step/extract-functions', async (req, res) => {
   try {
     const { documentContent, userConfig = null } = req.body;
@@ -1527,6 +1575,7 @@ app.post('/api/two-step/extract-functions', async (req, res) => {
 
     if (!documentContent) {
       console.log('DEBUG: documentContent is missing');
+      return res.status(400).json({ error: '文档内容为空' });
     } else {
       console.log('DEBUG: documentContent length:', documentContent.length);
     }
@@ -1549,8 +1598,25 @@ app.post('/api/two-step/extract-functions', async (req, res) => {
 
     const { client, model, useGeminiSDK } = clientConfig;
 
-    // 构建完整提示词，强调深度思考和严格遵守格式
-    const prompt = `# 【深度思考模式】功能过程识别
+    // 智能分块处理
+    let chunks = [];
+    if (documentContent.length > 6000) {
+      chunks = smartChunkDocument(documentContent, 6000);
+      console.log(`📦 文档过大(${documentContent.length}字符)，启用智能分块处理: 共 ${chunks.length} 块`);
+    } else {
+      chunks = [{ content: documentContent, index: 1, total: 1 }];
+    }
+
+    let allReplies = [];
+
+    // 循环处理每个分块
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      console.log(`\n🔄 正在处理第 ${chunk.index}/${chunk.total} 块 (${chunk.content.length}字符)...`);
+
+      // 构建完整提示词，强调深度思考和严格遵守格式
+      // 注意：这里使用 chunk.content 而不是 documentContent
+      const prompt = `# 【深度思考模式】功能过程识别 (分块 ${chunk.index}/${chunk.total})
 
 请在正式输出之前，先进行深度思考和分析。务必仔细阅读需求文档的每一个细节！
 
@@ -1617,9 +1683,9 @@ ${STEP1_FUNCTION_EXTRACTION_PROMPT}
 
 ---
 
-## 需求文档内容
+## 需求文档内容 (当前分块)
 \`\`\`
-${documentContent}
+${chunk.content}
 \`\`\`
 
 ---
@@ -1639,93 +1705,78 @@ ${documentContent}
 详细描述业务逻辑：接收xxx请求 -> 读取xxx配置/数据 -> 执行xxx逻辑 -> 返回xxx结果
 \`\`\`
 
-重复上述格式，直到所有功能过程都已输出。不要输出任何解释性文字或示例表格。 现在请开始深度分析文档。`;
+重复上述格式，直到当前文档分块中的所有功能过程都已输出。不要输出任何解释性文字或示例表格。 现在请开始深度分析文档。`;
 
-    let reply = '';
-    const maxRetries = 3; // 最多重试3次
-    const retryDelay = 3000; // 重试延迟3秒
+      let reply = '';
+      const maxRetries = 3; // 最多重试3次
+      const retryDelay = 3000; // 重试延迟3秒
 
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      try {
-        if (attempt > 0) {
-          console.log(`⏳ 第 ${attempt + 1} 次重试，等待 ${retryDelay / 1000} 秒...`);
-          await new Promise(resolve => setTimeout(resolve, retryDelay * attempt)); // 递增延迟
-        }
-
-        if (useGeminiSDK) {
-          const result = await client.generateContent(prompt);
-          const response = await result.response;
-          reply = response.text();
-        } else {
-          console.log(`DEBUG: 调用AI模型 ${model}...`);
-          const completion = await client.chat.completions.create({
-            model,
-            messages: [
-              {
-                role: 'system',
-                content: '你是一位资深的COSMIC功能分析专家。请认真阅读提示词中的所有规则，进行深度思考后严格按照格式要求输出。'
-              },
-              { role: 'user', content: prompt }
-            ],
-            temperature: 0.5,  // 降低temperature提高规范性
-            max_tokens: 8000
-          });
-
-          console.log('DEBUG: API响应结构:', JSON.stringify({
-            hasCompletion: !!completion,
-            hasChoices: !!completion?.choices,
-            choicesLength: completion?.choices?.length,
-            firstChoice: completion?.choices?.[0] ? 'exists' : 'missing',
-            completionKeys: completion ? Object.keys(completion) : []
-          }));
-
-          // 验证返回结果
-          if (!completion) {
-            throw new Error('AI返回了null/undefined');
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+          if (attempt > 0) {
+            console.log(`⏳ 第 ${attempt + 1} 次重试，等待 ${retryDelay / 1000} 秒...`);
+            await new Promise(resolve => setTimeout(resolve, retryDelay * attempt)); // 递增延迟
           }
 
-          if (!completion.choices || completion.choices.length === 0) {
-            console.error('DEBUG: 完整响应:', JSON.stringify(completion, null, 2));
-            throw new Error('AI返回的choices数组为空');
+          if (useGeminiSDK) {
+            const result = await client.generateContent(prompt);
+            const response = await result.response;
+            reply = response.text();
+          } else {
+            console.log(`DEBUG: 调用AI模型 ${model}...`);
+            const completion = await client.chat.completions.create({
+              model,
+              messages: [
+                {
+                  role: 'system',
+                  content: '你是一位资深的COSMIC功能分析专家。请认真阅读提示词中的所有规则，进行深度思考后严格按照格式要求输出。'
+                },
+                { role: 'user', content: prompt }
+              ],
+              temperature: 0.5,  // 降低temperature提高规范性
+              max_tokens: 8000
+            });
+
+            if (!completion || !completion.choices || completion.choices.length === 0) {
+              throw new Error('AI返回了无效响应');
+            }
+
+            reply = completion.choices[0].message.content;
+            console.log('DEBUG: 成功获取回复，长度:', reply.length);
           }
 
-          if (!completion.choices[0].message || !completion.choices[0].message.content) {
-            console.error('DEBUG: choices[0]结构:', JSON.stringify(completion.choices[0], null, 2));
-            throw new Error('AI返回的message内容为空');
+          // 成功获取回复，跳出重试循环
+          allReplies.push(reply);
+          break;
+
+        } catch (retryError) {
+          console.error(`❌ 分块 ${chunk.index} 调用出错:`, retryError.message);
+
+          const isRateLimitError = retryError.status === 429 || retryError.message?.includes('429');
+
+          if (isRateLimitError && attempt < maxRetries - 1) {
+            console.warn(`⚠️ 遇到并发限制，准备重试...`);
+            continue;
           }
 
-          reply = completion.choices[0].message.content;
-          console.log('DEBUG: 成功获取回复，长度:', reply.length);
+          // 如果是最后一次尝试失败，而且是分块模式，我们记录错误但不完全中断整个流程（尽可能保留其他块的结果）
+          if (attempt === maxRetries - 1) {
+            console.error(`❌ 分块 ${chunk.index} 最终失败，跳过此块`);
+            allReplies.push(`\n> ⚠️ 警告：文档分块 ${chunk.index} 处理失败：${retryError.message}\n`);
+          }
         }
-
-        // 成功获取回复，跳出重试循环
-        break;
-      } catch (retryError) {
-        console.error('AI调用出错:', {
-          status: retryError.status,
-          message: retryError.message,
-          data: retryError.response?.data
-        });
-        const errorMsg = retryError.message || '';
-        const isRateLimitError = retryError.status === 429 || errorMsg.includes('429') || errorMsg.includes('并发') || errorMsg.includes('rate limit');
-
-        if (isRateLimitError && attempt < maxRetries - 1) {
-          console.warn(`⚠️ 遇到429并发限制，准备第 ${attempt + 2} 次重试...`);
-          continue; // 继续重试
-        }
-
-        // 非429错误或已达到最大重试次数，抛出错误
-        throw retryError;
       }
     }
 
-    console.log('✅ 功能过程识别完成');
-    console.log('结果长度:', reply.length);
+    // 合并所有分块结果
+    const combinedReply = allReplies.join('\n\n');
+    console.log('✅ 所有分块处理完成');
+    console.log('合并后总长度:', combinedReply.length);
 
     res.json({
       success: true,
-      functionProcessList: reply,
-      message: '功能过程识别完成'
+      functionProcessList: combinedReply,
+      message: `功能过程识别完成，共处理 ${chunks.length} 个文档分块`
     });
 
   } catch (error) {
