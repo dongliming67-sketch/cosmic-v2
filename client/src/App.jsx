@@ -101,10 +101,10 @@ function App() {
   // 模型选择相关状态
   const [selectedModel, setSelectedModel] = useState(() => {
     if (typeof window !== 'undefined') {
-      return window.localStorage.getItem('selectedModel') || 'deepseek-32b';
+      return window.localStorage.getItem('selectedModel') || 'iflow-r1';
     }
-    return 'deepseek-32b';
-  }); // 'deepseek-32b' | 'deepseek-r1'
+    return 'iflow-r1';
+  }); // 'iflow-r1' | 'iflow-v3' | 'zhipu' | 'deepseek-32b' | 'deepseek-r1'
   const [showModelSelector, setShowModelSelector] = useState(false); // 是否显示模型选择弹窗
 
   // API配置弹窗相关状态
@@ -260,7 +260,27 @@ function App() {
   // 获取用户API配置（用于开放平台模式，每个请求携带用户自己的配置）
   const getUserConfig = () => {
     const savedApiKey = window.localStorage.getItem('userApiKey');
-    const savedModel = window.localStorage.getItem('selectedModel') || 'deepseek-32b';
+    const savedModel = window.localStorage.getItem('selectedModel') || 'iflow-r1';
+
+    // 如果选择了心流DeepSeek-R1，使用后端.env中的IFLOW_API_KEY
+    if (savedModel === 'iflow-r1') {
+      return {
+        apiKey: null,
+        baseUrl: 'https://apis.iflow.cn/v1',
+        model: 'deepseek-r1',
+        provider: 'iflow'
+      };
+    }
+
+    // 如果选择了心流DeepSeek-V3-671B
+    if (savedModel === 'iflow-v3') {
+      return {
+        apiKey: null,
+        baseUrl: 'https://apis.iflow.cn/v1',
+        model: 'deepseek-v3',
+        provider: 'iflow'
+      };
+    }
 
     // 如果选择了智谱GLM模型，返回null让后端使用.env中配置的ZHIPU_API_KEY
     if (savedModel === 'zhipu') {
@@ -1875,7 +1895,7 @@ ${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能
               title="选择AI模型"
             >
               <Bot className="w-4 h-4" />
-              <span>{selectedModel === 'deepseek' ? 'DeepSeek-R1' : '智谱GLM'}</span>
+              <span>{selectedModel === 'iflow-r1' ? '心流R1' : selectedModel === 'iflow-v3' ? '心流V3' : selectedModel === 'zhipu' ? '智谱GLM' : 'DeepSeek'}</span>
             </button>
 
             {/* 密钥重新写入按钮 */}
@@ -2019,8 +2039,9 @@ ${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能
                       <h3 className="text-sm font-medium text-[#1A1915]">大模型提供商</h3>
                       <p className="text-xs text-[#A8A49E]">
                         当前：{threeLayerProvider === 'auto' ? '自动选择' :
-                          threeLayerProvider === 'openrouter' ? '通义千问' :
-                            threeLayerProvider === 'groq' ? '文心一言' : '智谱AI'}
+                          threeLayerProvider === 'iflow' ? '心流DeepSeek-R1' :
+                            threeLayerProvider === 'openrouter' ? '通义千问' :
+                              threeLayerProvider === 'groq' ? '文心一言' : '智谱AI'}
                       </p>
                     </div>
                   </div>
@@ -2040,7 +2061,21 @@ ${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能
                       />
                       <div className="flex-1">
                         <div className="text-sm font-medium text-[#1A1915]">自动选择</div>
-                        <div className="text-xs text-[#A8A49E]">文心一言 → 通义千问 → 智谱</div>
+                        <div className="text-xs text-[#A8A49E]">心流DeepSeek-R1 → 文心一言 → 通义千问 → 智谱</div>
+                      </div>
+                    </label>
+                    <label className="flex items-center gap-3 p-3 border border-[#E5E3DE] rounded-lg cursor-pointer hover:bg-[#FEF7F4] transition-all">
+                      <input
+                        type="radio"
+                        name="threeLayerProvider"
+                        value="iflow"
+                        checked={threeLayerProvider === 'iflow'}
+                        onChange={(e) => setThreeLayerProvider(e.target.value)}
+                        className="w-4 h-4 text-[#D97757] focus:ring-[#D97757]"
+                      />
+                      <div className="flex-1">
+                        <div className="text-sm font-medium text-[#1A1915]">心流DeepSeek-R1</div>
+                        <div className="text-xs text-[#A8A49E]">心流开放平台 (推荐，速度快)</div>
                       </div>
                     </label>
                     <label className="flex items-center gap-3 p-3 border border-[#E5E3DE] rounded-lg cursor-pointer hover:bg-[#FEF7F4] transition-all">
@@ -3059,22 +3094,16 @@ ${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能
                       <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">选择初始模型</label>
                       <div className="grid grid-cols-2 gap-3">
                         <button
-                          onClick={() => setSelectedModel('deepseek-32b')}
-                          className={`p-3 text-[10px] font-medium rounded-xl border-2 transition-all ${selectedModel === 'deepseek-32b' ? 'border-[#D97757] bg-[#FEF7F4] text-[#D97757]' : 'border-gray-100 text-gray-500 hover:border-gray-200'}`}
+                          onClick={() => setSelectedModel('iflow-r1')}
+                          className={`p-3 text-[10px] font-medium rounded-xl border-2 transition-all ${selectedModel === 'iflow-r1' ? 'border-[#D97757] bg-[#FEF7F4] text-[#D97757]' : 'border-gray-100 text-gray-500 hover:border-gray-200'}`}
                         >
-                          R1-32B (蒸馏)
+                          心流R1 (推荐)
                         </button>
                         <button
-                          onClick={() => setSelectedModel('deepseek-r1')}
-                          className={`p-3 text-[10px] font-medium rounded-xl border-2 transition-all ${selectedModel === 'deepseek-r1' ? 'border-[#D97757] bg-[#FEF7F4] text-[#D97757]' : 'border-gray-100 text-gray-500 hover:border-gray-200'}`}
+                          onClick={() => setSelectedModel('iflow-v3')}
+                          className={`p-3 text-[10px] font-medium rounded-xl border-2 transition-all ${selectedModel === 'iflow-v3' ? 'border-[#D97757] bg-[#FEF7F4] text-[#D97757]' : 'border-gray-100 text-gray-500 hover:border-gray-200'}`}
                         >
-                          R1 (满血)
-                        </button>
-                        <button
-                          onClick={() => setSelectedModel('deepseek-v3')}
-                          className={`p-3 text-[10px] font-medium rounded-xl border-2 transition-all ${selectedModel === 'deepseek-v3' ? 'border-[#D97757] bg-[#FEF7F4] text-[#D97757]' : 'border-gray-100 text-gray-500 hover:border-gray-200'}`}
-                        >
-                          V3.2 (常规)
+                          心流V3-671B
                         </button>
                         <button
                           onClick={() => setSelectedModel('zhipu')}
@@ -3082,22 +3111,34 @@ ${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能
                         >
                           GLM-4.5
                         </button>
+                        <button
+                          onClick={() => setSelectedModel('deepseek-32b')}
+                          className={`p-3 text-[10px] font-medium rounded-xl border-2 transition-all ${selectedModel === 'deepseek-32b' ? 'border-[#D97757] bg-[#FEF7F4] text-[#D97757]' : 'border-gray-100 text-gray-500 hover:border-gray-200'}`}
+                        >
+                          R1-32B (蒸馏)
+                        </button>
                       </div>
+                      <button
+                        onClick={() => setSelectedModel('deepseek-r1')}
+                        className={`p-3 text-[10px] font-medium rounded-xl border-2 transition-all ${selectedModel === 'deepseek-r1' ? 'border-[#D97757] bg-[#FEF7F4] text-[#D97757]' : 'border-gray-100 text-gray-500 hover:border-gray-200'}`}
+                      >
+                        R1 (满血)
+                      </button>
                     </div>
-
-                    <button
-                      onClick={saveUserApiKey}
-                      disabled={isApiKeySaving || !userApiKey.trim()}
-                      className="w-full py-4 bg-[#D97757] hover:bg-[#B05C42] text-white rounded-xl font-bold shadow-lg shadow-orange-200 transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                    >
-                      {isApiKeySaving ? <Loader2 className="w-5 h-5 animate-spin" /> : <CheckCircle className="w-5 h-5" />}
-                      {isApiKeySaving ? '正在保存配置...' : '保存并开始使用'}
-                    </button>
-
-                    <p className="text-[10px] text-center text-gray-400 px-4">
-                      您的密钥将本地存储并仅用于与硅基流动 API 通信。请妥善保管，不要向他人泄露。
-                    </p>
                   </div>
+
+                  <button
+                    onClick={saveUserApiKey}
+                    disabled={isApiKeySaving || !userApiKey.trim()}
+                    className="w-full py-4 bg-[#D97757] hover:bg-[#B05C42] text-white rounded-xl font-bold shadow-lg shadow-orange-200 transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  >
+                    {isApiKeySaving ? <Loader2 className="w-5 h-5 animate-spin" /> : <CheckCircle className="w-5 h-5" />}
+                    {isApiKeySaving ? '正在保存配置...' : '保存并开始使用'}
+                  </button>
+
+                  <p className="text-[10px] text-center text-gray-400 px-4">
+                    您的密钥将本地存储并仅用于与硅基流动 API 通信。请妥善保管，不要向他人泄露。
+                  </p>
                 </div>
               </div>
             </div>

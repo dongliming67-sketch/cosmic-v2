@@ -1523,21 +1523,19 @@ app.post('/api/two-step/extract-functions', async (req, res) => {
     // 调试日志
     console.log('\n' + '='.repeat(60));
     console.log('📋 两步骤COSMIC拆分 - 第一步：功能过程识别');
-    console.log('文档长度:', documentContent?.length || 0);
-    console.log('🔑 userConfig 接收情况:', userConfig ? {
-      hasApiKey: !!userConfig.apiKey,
-      apiKeyPrefix: userConfig.apiKey ? userConfig.apiKey.substring(0, 10) + '...' : 'null',
-      baseUrl: userConfig.baseUrl,
-      model: userConfig.model,
-      provider: userConfig.provider
-    } : 'null (未传递)');
-    console.log('='.repeat(60));
+    console.log('DEBUG: 开始处理请求');
 
-    if (!documentContent || !documentContent.trim()) {
-      return res.status(400).json({ error: '请提供需求文档内容' });
+    if (!documentContent) {
+      console.log('DEBUG: documentContent is missing');
+    } else {
+      console.log('DEBUG: documentContent length:', documentContent.length);
     }
 
+    console.log('DEBUG: userConfig:', JSON.stringify(userConfig));
+
     const clientConfig = getActiveClientConfig(userConfig);
+    console.log('DEBUG: clientConfig obtained');
+
     if (!clientConfig) {
       console.log('❌ 无法获取客户端配置，userConfig 和环境变量均未设置');
       return res.status(400).json({ error: '请先配置API密钥' });
@@ -1659,6 +1657,7 @@ ${documentContent}
           const response = await result.response;
           reply = response.text();
         } else {
+          console.log(`DEBUG: 调用AI模型 ${model}...`);
           const completion = await client.chat.completions.create({
             model,
             messages: [
@@ -1671,12 +1670,42 @@ ${documentContent}
             temperature: 0.5,  // 降低temperature提高规范性
             max_tokens: 8000
           });
+
+          console.log('DEBUG: API响应结构:', JSON.stringify({
+            hasCompletion: !!completion,
+            hasChoices: !!completion?.choices,
+            choicesLength: completion?.choices?.length,
+            firstChoice: completion?.choices?.[0] ? 'exists' : 'missing',
+            completionKeys: completion ? Object.keys(completion) : []
+          }));
+
+          // 验证返回结果
+          if (!completion) {
+            throw new Error('AI返回了null/undefined');
+          }
+
+          if (!completion.choices || completion.choices.length === 0) {
+            console.error('DEBUG: 完整响应:', JSON.stringify(completion, null, 2));
+            throw new Error('AI返回的choices数组为空');
+          }
+
+          if (!completion.choices[0].message || !completion.choices[0].message.content) {
+            console.error('DEBUG: choices[0]结构:', JSON.stringify(completion.choices[0], null, 2));
+            throw new Error('AI返回的message内容为空');
+          }
+
           reply = completion.choices[0].message.content;
+          console.log('DEBUG: 成功获取回复，长度:', reply.length);
         }
 
         // 成功获取回复，跳出重试循环
         break;
       } catch (retryError) {
+        console.error('AI调用出错:', {
+          status: retryError.status,
+          message: retryError.message,
+          data: retryError.response?.data
+        });
         const errorMsg = retryError.message || '';
         const isRateLimitError = retryError.status === 429 || errorMsg.includes('429') || errorMsg.includes('并发') || errorMsg.includes('rate limit');
 
@@ -1747,7 +1776,7 @@ app.post('/api/two-step/cosmic-split', async (req, res) => {
     const { client, model, useGeminiSDK } = clientConfig;
 
     // 【新增】分批处理逻辑 - 当功能过程超过5个时，分成多批处理
-    const BATCH_SIZE = 5; // 每批处理5个功能过程
+    const BATCH_SIZE = 10; // 每批处理10个功能过程
     const needsBatching = extractedFunctions.length > BATCH_SIZE;
 
     // 将功能过程列表按格式分块
@@ -2351,6 +2380,18 @@ ${batchContent}
         console.log(`✓ 清理了 ${dataGroupFixedCount} 个数据组的分隔符问题`);
       } else {
         console.log(`✓ 数据组格式均正确，无需清理`);
+      }
+
+      // 【新增】步骤3.7：清理分隔符后的二次去重检查
+      // 原因：清理分隔符可能导致原本不同的数据组变成相同或高度重复（如"低空保障任务配置表-更新任务配置记录"和"低空保障任务配置表-读取配置表记录"都变成"低空保障任务配置表"）
+      console.log('\n⏳ 步骤3.7：清理分隔符后的二次去重检查（重要！）...');
+      const beforeSecondDedup = tableData.length;
+      tableData = await performFinalDeduplication(tableData);
+      const afterSecondDedup = tableData.length;
+      if (beforeSecondDedup > afterSecondDedup) {
+        console.log(`✓ 二次去重完成：移除了 ${beforeSecondDedup - afterSecondDedup} 条重复数据（清理分隔符导致的新重复）`);
+      } else {
+        console.log(`✓ 无新增重复数据`);
       }
 
       // 移除内部字段

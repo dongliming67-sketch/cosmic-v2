@@ -110,6 +110,34 @@ function getActiveClientConfig(userConfig = null) {
     }
   }
 
+  // 特殊处理：如果前端指定使用心流（iflow）但没有提供apiKey，使用环境变量中的心流配置
+  if (userConfig && userConfig.provider === 'iflow' && !userConfig.apiKey) {
+    console.log('[Open Platform] 前端选择心流模型，使用后端.env中的IFLOW_API_KEY');
+    const iflowApiKey = process.env.IFLOW_API_KEY;
+    const iflowBaseUrl = userConfig.baseUrl || process.env.IFLOW_BASE_URL || 'https://apis.iflow.cn/v1';
+    const iflowModel = userConfig.model || process.env.IFLOW_MODEL || 'deepseek-r1';
+
+    console.log(`DEBUG: userConfig:`, JSON.stringify(userConfig));
+    console.log(`DEBUG: 心流配置成功，模型: ${iflowModel}`);
+
+    if (iflowApiKey) {
+      const client = new OpenAI({
+        apiKey: iflowApiKey,
+        baseURL: iflowBaseUrl
+      });
+      return {
+        client,
+        model: iflowModel,
+        fallbackModels: [],
+        provider: 'iflow',
+        useGroqSDK: false,
+        useGeminiSDK: false
+      };
+    } else {
+      console.warn('警告：前端选择心流模型，但.env中未配置IFLOW_API_KEY');
+    }
+  }
+
   // 如果提供了用户配置，优先使用
   if (userConfig && userConfig.apiKey) {
     const provider = (userConfig.provider || 'openai').toLowerCase();
@@ -1029,21 +1057,105 @@ function cleanupAIResponse(reply) {
         /^请求处理$/
       ];
 
+      // ===== 业务关键词智能注入逻辑（修复子过程描述和数据组泛化问题）=====
+
+      // 步骤1: 从功能过程中提取业务关键词（去除通用动词）
+      let businessKeywords = '';
       if (funcProcess.trim()) {
+        // 移除通用动词,提取核心业务对象
+        const verbsToRemove = [
+          '新增', '修改', '删除', '查询', '创建', '更新', '启用', '禁用',
+          '读取', '写入', '接收', '返回', '记录', '获取', '设置', '配置',
+          '导入', '导出', '审核', '审批', '分配', '执行', '同步', '推送',
+          '汇总', '统计', '分析', '计算', '检测', '监控', '告警', '通知'
+        ];
+
+        let cleanedProcess = funcProcess.trim();
+        for (const verb of verbsToRemove) {
+          cleanedProcess = cleanedProcess.replace(new RegExp(`^${verb}`, 'g'), '');
+        }
+
+        // 如果去除动词后还有至少4个字符,说明有实质业务关键词
+        if (cleanedProcess.length >= 4) {
+          businessKeywords = cleanedProcess.substring(0, 12); // 提取前12个字作为业务关键词
+        }
+
+        // 检测并增强笼统的功能过程
         const isVague = vagueFuncPatterns.some(pattern => pattern.test(funcProcess.trim()));
         if (isVague) {
           console.log(`⚠️ 警告：检测到笼统功能过程: "${funcProcess}"，建议增加业务场景描述`);
           // 尝试从子过程描述中提取业务关键词来增强
           const subProcessDesc = cols[4] || '';
-          const businessKeywords = subProcessDesc.match(/(低空保障|参数自动化|质差|健康度|告警|工单|航线|飞行|任务配置|规则|监控|统计|分析)/);
-          if (businessKeywords && businessKeywords[1]) {
-            funcProcess = businessKeywords[1] + funcProcess;
+          const extractedKeywords = subProcessDesc.match(/(低空保障|参数自动化|质差|健康度|告警|工单|航线|飞行|任务配置|规则|监控|统计|分析)/);
+          if (extractedKeywords && extractedKeywords[1]) {
+            funcProcess = extractedKeywords[1] + funcProcess;
+            businessKeywords = extractedKeywords[1]; // 更新业务关键词
             console.log(`  → 已增强为: "${funcProcess}"`);
           }
         }
       }
 
+      // 步骤2: 智能增强子过程描述（确保包含业务关键词）
+      let subProcessDesc = cols[4] || '';
+      if (subProcessDesc.trim() && businessKeywords) {
+        // 检测子过程描述是否过于泛化（缺少业务关键词）
+        const vagueSubProcessPatterns = [
+          /^接收.*?请求$/,
+          /^读取.*?表$/,
+          /^读取.*?数据$/,
+          /^记录.*?日志$/,
+          /^返回.*?结果$/,
+          /^返回.*?响应$/,
+          /^调用.*?表$/,
+          /^查询.*?信息$/,
+          /^保存.*?数据$/
+        ];
+
+        const isVagueSub = vagueSubProcessPatterns.some(pattern => pattern.test(subProcessDesc.trim()));
+
+        // 如果子过程描述很泛,且不包含业务关键词的核心部分(至少4个字符)
+        const keywordCore = businessKeywords.substring(0, Math.min(businessKeywords.length, 6));
+        if (isVagueSub && !subProcessDesc.includes(keywordCore)) {
+          // 智能注入业务关键词
+          const actionVerbs = ['接收', '读取', '记录', '返回', '调用', '查询', '保存', '获取', '更新'];
+          for (const verb of actionVerbs) {
+            if (subProcessDesc.startsWith(verb)) {
+              // 在动词后插入业务关键词
+              subProcessDesc = verb + businessKeywords + subProcessDesc.substring(verb.length);
+              console.log(`🔧 子过程描述增强: "${cols[4]}" -> "${subProcessDesc}"`);
+              break;
+            }
+          }
+        }
+      }
+
+      // 步骤3: 智能增强数据组（确保包含业务关键词）
+      if (dataGroup.trim() && businessKeywords) {
+        // 检测数据组是否过于泛化
+        const vagueDataGroupPatterns = [
+          /^.*?请求$/,
+          /^.*?响应$/,
+          /^.*?表$/,
+          /^.*?数据$/,
+          /^.*?信息$/,
+          /^.*?日志$/
+        ];
+
+        // 超级泛化的名词（必须增强）
+        const superVagueNouns = ['请求', '响应', '数据', '信息', '表', '日志', '结果', '消息'];
+        const isSuperVague = superVagueNouns.some(noun => dataGroup === noun || dataGroup.endsWith(noun));
+
+        // 如果数据组很泛,且不包含业务关键词
+        const keywordCore = businessKeywords.substring(0, Math.min(businessKeywords.length, 6));
+        if (isSuperVague && !dataGroup.includes(keywordCore)) {
+          // 在泛化名词前插入业务关键词
+          console.log(`🔧 数据组增强: "${originalGroup}" -> "${businessKeywords}${dataGroup}"`);
+          dataGroup = businessKeywords + dataGroup;
+        }
+      }
+
       cols[6] = dataGroup;
+      cols[4] = subProcessDesc;
       cols[3] = funcProcess;
       return cols.join('|');
     }

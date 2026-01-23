@@ -2,7 +2,7 @@
 const axios = require('axios');
 const fs = require('fs');
 
-const BASE_URL = 'http://localhost:3002';
+const BASE_URL = 'http://localhost:3001';
 
 // 读取测试文档
 const testDocPath = './test-docs/江苏移动2025年项目需求文档-低空无线网络优化（参数自动下发） - 张强(1)(1).docx';
@@ -107,7 +107,7 @@ async function runSingleTest(testId) {
         const step1Res = await axios.post(`${BASE_URL}/api/two-step/extract-functions`, {
             documentContent,
             userConfig
-        }, { timeout: 300000 });
+        }, { timeout: 600000 });
 
         if (!step1Res.data.success) {
             throw new Error(`第一步失败: ${step1Res.data.error} `);
@@ -121,7 +121,7 @@ async function runSingleTest(testId) {
         const step2Res = await axios.post(`${BASE_URL}/api/two-step/cosmic-split`, {
             functionProcessList: functionList,
             userConfig
-        }, { timeout: 300000 });
+        }, { timeout: 600000 });
 
         if (!step2Res.data.success) {
             throw new Error(`第二步失败: ${step2Res.data.error} `);
@@ -469,27 +469,25 @@ async function analyzeResults(results) {
 
 async function main() {
     console.log('╔════════════════════════════════════════════════════════════════╗');
-    console.log('║            🧪 COSMIC 拆分测试 - 开始（串行避免限流）             ║');
+    console.log('║            🧪 COSMIC 拆分测试 - 开始（串行执行）                ║');
     console.log('╚════════════════════════════════════════════════════════════════╝');
     console.log(`\n📅 测试时间: ${new Date().toLocaleString()}`);
     console.log(`🔗 服务地址: ${BASE_URL}`);
     console.log(`📄 文档长度: ${documentContent.length} 字符`);
-    console.log(`🔄 测试数: 3（串行执行）`);
+    console.log(`🔄 测试数: 2（串行执行）`);
 
     console.log('\n⏳ 执行中...\n');
 
-    // 串行运行3个测试，避免API限流
     const results = [];
-    for (let i = 1; i <= 3; i++) {
+    for (let i = 1; i <= 2; i++) {
         console.log(`\n${'='.repeat(60)}`);
-        console.log(`🧪 开始测试 ${i}/3...`);
+        console.log(`🧪 开始测试 ${i}/2...`);
         const result = await runSingleTest(i);
         results.push(result);
 
-        // 测试之间等待5秒，避免限流
-        if (i < 3) {
-            console.log(`⏳ 等待5秒后开始下一个测试...`);
-            await new Promise(resolve => setTimeout(resolve, 5000));
+        if (i < 2) {
+            console.log(`\n⏳ 等待 10 秒后执行下一个测试，避免触发 API 并发限制...`);
+            await new Promise(resolve => setTimeout(resolve, 10000));
         }
     }
 
