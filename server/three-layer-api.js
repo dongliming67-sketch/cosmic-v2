@@ -85,6 +85,31 @@ function getOpenRouterFallbackModels() {
 
 // 获取当前激活的客户端和模型配置 (支持传入用户配置以实现开放平台模式)
 function getActiveClientConfig(userConfig = null) {
+  // 特殊处理：如果前端指定使用智谱但没有提供apiKey，使用环境变量中的智谱配置
+  if (userConfig && userConfig.provider === 'zhipu' && !userConfig.apiKey) {
+    console.log('[Open Platform] 前端选择智谱GLM，使用后端.env中的ZHIPU_API_KEY');
+    const zhipuApiKey = process.env.ZHIPU_API_KEY;
+    const zhipuBaseUrl = process.env.ZHIPU_BASE_URL || 'https://open.bigmodel.cn/api/paas/v4';
+    const zhipuModel = process.env.ZHIPU_MODEL || 'glm-4.5-flash';
+
+    if (zhipuApiKey) {
+      const client = new OpenAI({
+        apiKey: zhipuApiKey,
+        baseURL: zhipuBaseUrl
+      });
+      return {
+        client,
+        model: zhipuModel,
+        fallbackModels: [],
+        provider: 'zhipu',
+        useGroqSDK: false,
+        useGeminiSDK: false
+      };
+    } else {
+      console.warn('警告：前端选择智谱GLM，但.env中未配置ZHIPU_API_KEY');
+    }
+  }
+
   // 如果提供了用户配置，优先使用
   if (userConfig && userConfig.apiKey) {
     const provider = (userConfig.provider || 'openai').toLowerCase();
@@ -144,6 +169,7 @@ function getActiveClientConfig(userConfig = null) {
       useGeminiSDK: false
     };
   }
+
 
   // 以下为回退逻辑：使用环境变量（原有逻辑）
   // THREE_LAYER_PROVIDER: 'gemini' | 'zhipu' | 'groq' | 'openrouter' | 'auto'

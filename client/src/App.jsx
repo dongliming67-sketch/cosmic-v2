@@ -262,6 +262,16 @@ function App() {
     const savedApiKey = window.localStorage.getItem('userApiKey');
     const savedModel = window.localStorage.getItem('selectedModel') || 'deepseek-32b';
 
+    // 如果选择了智谱GLM模型，返回null让后端使用.env中配置的ZHIPU_API_KEY
+    if (savedModel === 'zhipu') {
+      return {
+        apiKey: null, // 不传apiKey，让后端使用.env中的ZHIPU_API_KEY
+        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+        model: 'glm-4.5-flash',
+        provider: 'zhipu'
+      };
+    }
+
     if (!savedApiKey) return null;
 
     // 根据模型选择确定具体的模型名称
