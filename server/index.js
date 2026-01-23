@@ -2337,49 +2337,70 @@ ${batchContent}
         console.log(`✓ 所有子过程描述格式均正确`);
       }
 
-      // 【新增】步骤3.6：清理数据组中的分隔符（连接符"-"和中文间隔号"·"）
-      console.log('\n⏳ 步骤3.6：清理数据组分隔符（连接符和间隔号）...');
+      // 【增强版】步骤3.6：智能重构数据组名称（动作提取 + 类型后缀增强）
+      console.log('\n⏳ 步骤3.6：智能重构数据组名称（专业化去重）...');
       let dataGroupFixedCount = 0;
       tableData = tableData.map(row => {
         let dataGroup = row.dataGroup || '';
+        const moveType = (row.dataMovementType || '').toUpperCase();
+        const subDesc = row.subProcessDesc || '';
         const originalGroup = dataGroup;
 
-        // 检测并修复分隔符问题：支持连接符"-"和中文间隔号"·"
+        // 核心逻辑：如果包含分隔符，或者属于需要标准化的数据组
         const separatorPattern = /[·\-]/;
-        if (separatorPattern.test(dataGroup) && (dataGroup.includes('表') || dataGroup.includes('库') || dataGroup.includes('集') || dataGroup.includes('数据'))) {
-          // 匹配"xxx表·动作"或"xxx表-动作"格式
-          const separatorMatch = dataGroup.match(/^(.+?(?:表|库|集|数据))[·\-](.+)$/);
-          if (separatorMatch) {
-            const baseName = separatorMatch[1]; // xxx表/库/集/数据
-            const suffix = separatorMatch[2]; // 分隔符后的内容
+        if (separatorPattern.test(dataGroup) || dataGroup.length > 15 || /表$|库$|集$|数据$/.test(dataGroup)) {
 
-            // 检测后缀是否包含动词，如果是则只保留基础名
-            const verbPatterns = /^(读取|写入|查询|删除|修改|新增|导出|导入|获取|接收|返回|保存|更新|执行|存储|校验|进行)/;
-            if (verbPatterns.test(suffix) || suffix.length > 15) {
-              // 分隔符后是动词或后缀过长，直接使用基础名
-              dataGroup = baseName;
-            } else {
-              // 后缀不是动词开头且长度适中，拼接为更自然的表达
-              const baseWithoutSuffix = baseName.replace(/表$|库$|集$/, '');
-              dataGroup = baseWithoutSuffix + suffix + '表';
-            }
-          } else {
-            // 其他情况，直接移除分隔符及其后内容
-            dataGroup = dataGroup.split(/[·\-]/)[0].trim();
+          // 1. 提取基础业务对象 (Base Name)
+          // 优先取分隔符前的部分，如果没有，则取前6个字，并移除“表/库/集”
+          let baseName = dataGroup.split(separatorPattern)[0]
+            .replace(/(?:表|库|集|数据|信息|记录|参数|结果|详情)$/, '')
+            .trim();
+
+          if (baseName.length < 2) baseName = (row.functionalProcess || '').slice(0, 8).replace(/^(查询|创建|删除|修改|编辑|导出|导入|控制|管理)/, '');
+          if (!baseName) baseName = '业务数据';
+
+          // 2. 提取动作关键词 (Action Keyword)
+          // 从分隔符后面部分提取，或者从子过程描述中提取
+          let actionPart = dataGroup.split(separatorPattern)[1] || '';
+          const actionWords = ['更新', '读取', '查询', '删除', '新增', '创建', '校验', '验证', '保存', '记录', '下发', '上传', '下载', '导出', '导入', '同步'];
+          let detectedAction = actionWords.find(word => actionPart.includes(word) || subDesc.includes(word)) || '';
+
+          // 3. 根据移动类型 (E/R/W/X) 分配专业后缀
+          let professionalSuffix = '表';
+          switch (moveType) {
+            case 'E':
+              professionalSuffix = detectedAction ? `${detectedAction}请求参数表` : '请求参数表';
+              break;
+            case 'R':
+              professionalSuffix = detectedAction ? `${detectedAction}数据表` : '主数据表';
+              break;
+            case 'W':
+              professionalSuffix = detectedAction ? `${detectedAction}结果记录表` : '处理记录表';
+              break;
+            case 'X':
+              professionalSuffix = detectedAction ? `${detectedAction}响应结果表` : '响应反馈表';
+              break;
+            default:
+              professionalSuffix = '数据表';
           }
 
+          // 4. 组合成最终名称：[基础业务对象] + [动作提取] + [专业后缀]
+          // 例如：低空保障任务 + 更新 + 结果记录表
+          dataGroup = baseName + professionalSuffix;
+
           if (originalGroup !== dataGroup) {
-            console.log(`🔧 数据组分隔符清理: "${originalGroup}" -> "${dataGroup}"`);
+            console.log(`🔧 数据组专业化重构: "${originalGroup}" -> "${dataGroup}"`);
             dataGroupFixedCount++;
           }
         }
 
         return { ...row, dataGroup };
       });
+
       if (dataGroupFixedCount > 0) {
-        console.log(`✓ 清理了 ${dataGroupFixedCount} 个数据组的分隔符问题`);
+        console.log(`✓ 智能重构了 ${dataGroupFixedCount} 个数据组名称，已实现系统性去重`);
       } else {
-        console.log(`✓ 数据组格式均正确，无需清理`);
+        console.log(`✓ 数据组名称已符合专业规范`);
       }
 
       // 【新增】步骤3.7：清理分隔符后的二次去重检查
