@@ -90,7 +90,7 @@ function getActiveClientConfig(userConfig = null) {
     console.log('[Open Platform] 前端选择智谱GLM，使用后端.env中的ZHIPU_API_KEY');
     const zhipuApiKey = process.env.ZHIPU_API_KEY;
     const zhipuBaseUrl = process.env.ZHIPU_BASE_URL || 'https://open.bigmodel.cn/api/paas/v4';
-    const zhipuModel = process.env.ZHIPU_MODEL || 'glm-4.5-flash';
+    const zhipuModel = process.env.ZHIPU_MODEL || 'glm-4.7-flash';
 
     if (zhipuApiKey) {
       const client = new OpenAI({

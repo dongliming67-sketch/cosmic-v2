@@ -41,7 +41,7 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('https://open.bigmodel.cn/api/paas/v4');
-  const [modelName, setModelName] = useState('glm-4-flash');
+  const [modelName, setModelName] = useState('glm-4.7-flash');
   const [apiStatus, setApiStatus] = useState({ hasApiKey: false });
   const [tableData, setTableData] = useState([]);
   const [streamingContent, setStreamingContent] = useState('');
@@ -267,7 +267,7 @@ function App() {
       return {
         apiKey: null, // 不传apiKey，让后端使用.env中的ZHIPU_API_KEY
         baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-        model: 'glm-4.5-flash',
+        model: 'glm-4.7-flash',
         provider: 'zhipu'
       };
     }
@@ -2408,7 +2408,7 @@ ${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能
                 <button
                   onClick={() => {
                     setBaseUrl('https://open.bigmodel.cn/api/paas/v4');
-                    setModelName('glm-4-flash');
+                    setModelName('glm-4.7-flash');
                   }}
                   className="text-sm px-3 py-1.5 bg-green-500 text-white rounded-lg hover:bg-green-600"
                 >
