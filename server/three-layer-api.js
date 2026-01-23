@@ -233,6 +233,31 @@ function getActiveClientConfig(userConfig = null) {
     }
   }
 
+  // 心流开放平台 (iflow) - DeepSeek-R1
+  if (provider === 'iflow') {
+    const iflowKey = process.env.IFLOW_API_KEY;
+    const iflowBaseUrl = process.env.IFLOW_BASE_URL || 'https://apis.iflow.cn/v1';
+    const iflowModel = process.env.IFLOW_MODEL || 'deepseek-r1';
+
+    if (iflowKey) {
+      const client = new OpenAI({
+        apiKey: iflowKey,
+        baseURL: iflowBaseUrl
+      });
+
+      console.log(`心流开放平台客户端已初始化，模型: ${iflowModel}`);
+
+      return {
+        client,
+        model: iflowModel,
+        fallbackModels: [],
+        provider: 'iflow',
+        useGroqSDK: false,
+        useGeminiSDK: false
+      };
+    }
+  }
+
   // OpenAI兼容API（包括DeepSeek等）
   if (provider === 'openai') {
     const openaiKey = process.env.OPENAI_API_KEY;
@@ -257,9 +282,27 @@ function getActiveClientConfig(userConfig = null) {
     }
   }
 
-  // auto 模式：优先使用 Gemini（推荐），其次智谱（国内稳定），最后 OpenRouter
+  // auto 模式：优先使用 心流DeepSeek-R1（推荐），其次 Gemini，其次智谱（国内稳定）
   if (provider === 'auto') {
-    // 优先 Gemini（Google官方API，推荐）
+    // 最优先：心流开放平台 DeepSeek-R1（速度快，无并发限制）
+    if (process.env.IFLOW_API_KEY) {
+      const iflowBaseUrl = process.env.IFLOW_BASE_URL || 'https://apis.iflow.cn/v1';
+      const iflowModel = process.env.IFLOW_MODEL || 'deepseek-r1';
+      console.log(`[Auto] 使用心流开放平台 DeepSeek-R1`);
+      return {
+        client: new OpenAI({
+          apiKey: process.env.IFLOW_API_KEY,
+          baseURL: iflowBaseUrl
+        }),
+        model: iflowModel,
+        fallbackModels: [],
+        provider: 'iflow',
+        useGroqSDK: false,
+        useGeminiSDK: false
+      };
+    }
+
+    // 其次 Gemini（Google官方API）
     const gemini = getGeminiClient();
     if (gemini.client && gemini.model) {
       return {
