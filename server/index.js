@@ -1644,25 +1644,50 @@ ${documentContent}
 重复上述格式，直到所有功能过程都已输出。不要输出任何解释性文字或示例表格。 现在请开始深度分析文档。`;
 
     let reply = '';
+    const maxRetries = 3; // 最多重试3次
+    const retryDelay = 3000; // 重试延迟3秒
 
-    if (useGeminiSDK) {
-      const result = await client.generateContent(prompt);
-      const response = await result.response;
-      reply = response.text();
-    } else {
-      const completion = await client.chat.completions.create({
-        model,
-        messages: [
-          {
-            role: 'system',
-            content: '你是一位资深的COSMIC功能分析专家。请认真阅读提示词中的所有规则，进行深度思考后严格按照格式要求输出。'
-          },
-          { role: 'user', content: prompt }
-        ],
-        temperature: 0.5,  // 降低temperature提高规范性
-        max_tokens: 8000
-      });
-      reply = completion.choices[0].message.content;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        if (attempt > 0) {
+          console.log(`⏳ 第 ${attempt + 1} 次重试，等待 ${retryDelay / 1000} 秒...`);
+          await new Promise(resolve => setTimeout(resolve, retryDelay * attempt)); // 递增延迟
+        }
+
+        if (useGeminiSDK) {
+          const result = await client.generateContent(prompt);
+          const response = await result.response;
+          reply = response.text();
+        } else {
+          const completion = await client.chat.completions.create({
+            model,
+            messages: [
+              {
+                role: 'system',
+                content: '你是一位资深的COSMIC功能分析专家。请认真阅读提示词中的所有规则，进行深度思考后严格按照格式要求输出。'
+              },
+              { role: 'user', content: prompt }
+            ],
+            temperature: 0.5,  // 降低temperature提高规范性
+            max_tokens: 8000
+          });
+          reply = completion.choices[0].message.content;
+        }
+
+        // 成功获取回复，跳出重试循环
+        break;
+      } catch (retryError) {
+        const errorMsg = retryError.message || '';
+        const isRateLimitError = retryError.status === 429 || errorMsg.includes('429') || errorMsg.includes('并发') || errorMsg.includes('rate limit');
+
+        if (isRateLimitError && attempt < maxRetries - 1) {
+          console.warn(`⚠️ 遇到429并发限制，准备第 ${attempt + 2} 次重试...`);
+          continue; // 继续重试
+        }
+
+        // 非429错误或已达到最大重试次数，抛出错误
+        throw retryError;
+      }
     }
 
     console.log('✅ 功能过程识别完成');
@@ -1676,6 +1701,15 @@ ${documentContent}
 
   } catch (error) {
     console.error('功能过程识别失败:', error);
+
+    // 对429错误给出更友好的提示
+    const errorMsg = error.message || '';
+    if (error.status === 429 || errorMsg.includes('429') || errorMsg.includes('并发')) {
+      return res.status(429).json({
+        error: '智谱API并发限制，请稍等几秒后重试。建议：1. 减少同时操作 2. 切换到SiliconFlow模型'
+      });
+    }
+
     res.status(500).json({ error: '识别失败: ' + error.message });
   }
 });
@@ -1798,8 +1832,11 @@ ${batchContent}
 现在请开始拆分！`;
     };
 
-    // 【分批调用AI】
+    // 【分批调用AI】（带429重试机制）
     let allReplies = [];
+    const maxRetries = 3;
+    const baseRetryDelay = 3000; // 基础重试延迟3秒
+
     for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
       const batchContent = batches[batchIdx];
       const batchFpCount = (batchContent.match(/##功能过程/g) || []).length;
@@ -1809,22 +1846,53 @@ ${batchContent}
       const batchPrompt = generatePromptForBatch(batchContent, batchIdx, batches.length);
 
       let batchReply = '';
-      if (useGeminiSDK) {
-        const result = await client.generateContent(batchPrompt);
-        const response = await result.response;
-        batchReply = response.text();
-      } else {
-        const completion = await client.chat.completions.create({
-          model,
-          messages: [{ role: 'user', content: batchPrompt }],
-          temperature: 0.5,
-          max_tokens: 16000
-        });
-        batchReply = completion.choices[0].message.content;
+
+      // 带重试机制的API调用
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+          if (attempt > 0) {
+            const delay = baseRetryDelay * attempt;
+            console.log(`   ⏳ 第 ${attempt + 1} 次重试，等待 ${delay / 1000} 秒...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+          }
+
+          if (useGeminiSDK) {
+            const result = await client.generateContent(batchPrompt);
+            const response = await result.response;
+            batchReply = response.text();
+          } else {
+            const completion = await client.chat.completions.create({
+              model,
+              messages: [{ role: 'user', content: batchPrompt }],
+              temperature: 0.5,
+              max_tokens: 16000
+            });
+            batchReply = completion.choices[0].message.content;
+          }
+
+          // 成功，跳出重试循环
+          break;
+        } catch (retryError) {
+          const errorMsg = retryError.message || '';
+          const isRateLimitError = retryError.status === 429 || errorMsg.includes('429') || errorMsg.includes('并发') || errorMsg.includes('rate limit');
+
+          if (isRateLimitError && attempt < maxRetries - 1) {
+            console.warn(`   ⚠️ 批次 ${batchIdx + 1} 遇到429并发限制，准备重试...`);
+            continue;
+          }
+
+          throw retryError;
+        }
       }
 
       console.log(`   ✅ 批次 ${batchIdx + 1} 完成，结果长度: ${batchReply.length}`);
       allReplies.push(batchReply);
+
+      // 批次间添加延迟，避免触发并发限制
+      if (batchIdx < batches.length - 1) {
+        console.log(`   ⏳ 批次间延迟 1.5 秒...`);
+        await new Promise(resolve => setTimeout(resolve, 1500));
+      }
     }
 
     // 合并所有批次的结果
