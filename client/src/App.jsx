@@ -1813,7 +1813,7 @@ ${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能
                             // 随时可以重新分析，会中断当前分析并重新开始
                             handleStartAnalysis(documentContent);
                           } else {
-                            setShowSettings(true);
+                            setToastMessage('API未配置，请检查服务端 .env 文件中的 IFLOW_API_KEY');
                           }
                         }}
                         className="px-3 py-1 text-xs bg-[#D97757] text-white rounded-lg hover:bg-[#C4684A] transition-all flex items-center gap-1"
@@ -2254,108 +2254,7 @@ ${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能
         </div>
       </main>
 
-      {/* 设置弹窗 - Claude风格 */}
-      {showSettings && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-[#FAF9F7] rounded-2xl shadow-2xl w-full max-w-md p-6 m-4 max-h-[90vh] overflow-y-auto border border-[#E5E3DE]">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-lg font-semibold text-[#1A1915]">API 设置</h2>
-              <button
-                onClick={() => setShowSettings(false)}
-                className="p-2 hover:bg-[#EDEAE5] rounded-lg transition-all"
-              >
-                <X className="w-4 h-4 text-[#6B6760]" />
-              </button>
-            </div>
-
-            <div className="space-y-4">
-              {/* 快速配置 */}
-              <div className="bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-lg p-4">
-                <div className="flex items-center gap-2 mb-2">
-                  <Zap className="w-5 h-5 text-green-600" />
-                  <span className="font-medium text-green-800">推荐：智谱GLM-4-Flash（免费）</span>
-                </div>
-                <p className="text-sm text-green-700 mb-3">
-                  无限tokens、永久有效、无需付费
-                </p>
-                <button
-                  onClick={() => {
-                    setBaseUrl('https://open.bigmodel.cn/api/paas/v4');
-                    setModelName('glm-4.7-flash');
-                  }}
-                  className="text-sm px-3 py-1.5 bg-green-500 text-white rounded-lg hover:bg-green-600"
-                >
-                  一键填入智谱配置
-                </button>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  API Base URL
-                </label>
-                <select
-                  value={baseUrl}
-                  onChange={(e) => setBaseUrl(e.target.value)}
-                  className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 mb-2"
-                >
-                  <option value="https://open.bigmodel.cn/api/paas/v4">智谱GLM (免费)</option>
-                  <option value="https://api.siliconflow.cn/v1">SiliconCloud (免费)</option>
-                  <option value="https://api.openai.com/v1">OpenAI</option>
-                  <option value="https://api.deepseek.com/v1">DeepSeek</option>
-                  <option value="https://ark.cn-beijing.volces.com/api/v3">豆包/火山方舟</option>
-                  <option value="custom">自定义...</option>
-                </select>
-                {baseUrl === 'custom' && (
-                  <input
-                    type="text"
-                    value=""
-                    onChange={(e) => setBaseUrl(e.target.value)}
-                    placeholder="输入自定义API地址"
-                    className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                )}
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  API Key
-                </label>
-                <input
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder="输入你的API密钥..."
-                  className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-
-              <div className="bg-blue-50 rounded-lg p-4 text-sm">
-                <p className="font-medium text-blue-800 mb-2 flex items-center gap-2">
-                  <Info className="w-4 h-4" />
-                  免费API获取方式
-                </p>
-                <div className="space-y-2 text-blue-700">
-                  <div className="flex items-start gap-2">
-                    <span className="font-bold">智谱GLM:</span>
-                    <span>访问 <a href="https://bigmodel.cn" target="_blank" rel="noopener noreferrer" className="underline hover:text-blue-900">bigmodel.cn</a> 注册获取</span>
-                  </div>
-                  <div className="flex items-start gap-2">
-                    <span className="font-bold">SiliconCloud:</span>
-                    <span>访问 <a href="https://cloud.siliconflow.cn" target="_blank" rel="noopener noreferrer" className="underline hover:text-blue-900">cloud.siliconflow.cn</a> 注册获取</span>
-                  </div>
-                </div>
-              </div>
-
-              <button
-                onClick={saveApiConfig}
-                className="w-full bg-blue-500 text-white py-3 rounded-lg hover:bg-blue-600 transition-colors font-medium"
-              >
-                保存配置
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* API设置弹窗已移除 - 心流平台密钥由后端.env管理，无需前端配置 */}
 
       {/* 文档预览弹窗 */}
       {showPreview && (
@@ -2665,61 +2564,7 @@ ${uniqueFunctions.length < selectedFunctions.length ? '⚠️ 部分功能可能
         </div>
       )}
 
-      {/* 模型选择弹窗 */}
-      {showModelSelector && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md m-4">
-            <div className="flex items-center justify-between p-6 border-b border-gray-200">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-[#FEF7F4] rounded-lg flex items-center justify-center">
-                  <Bot className="w-5 h-5 text-[#D97757]" />
-                </div>
-                <div>
-                  <h2 className="text-xl font-semibold text-gray-800">选择AI模型</h2>
-                  <p className="text-sm text-gray-500">心流开放平台提供的AI模型</p>
-                </div>
-              </div>
-              <button onClick={() => setShowModelSelector(false)} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
-                <X className="w-5 h-5 text-gray-500" />
-              </button>
-            </div>
-            <div className="p-6 space-y-3">
-              <button onClick={() => handleModelChange('deepseek-v3')} className={`w-full p-4 border-2 rounded-xl text-left transition-all ${selectedModel === 'deepseek-v3' ? 'border-[#D97757] bg-[#FEF7F4]' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'}`}>
-                <div className="flex items-center justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                      <h3 className="font-semibold text-gray-800">DeepSeek-V3</h3>
-                      <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded-full">推荐</span>
-                    </div>
-                    <p className="text-sm text-gray-500">671B 参数，速度快、质量高</p>
-                    <p className="text-xs text-gray-400 mt-1">✓ 极速响应 • 综合素质极高 • COSMIC拆分首选</p>
-                  </div>
-                  {selectedModel === 'deepseek-v3' && <CheckCircle className="w-6 h-6 text-[#D97757] flex-shrink-0" />}
-                </div>
-              </button>
-
-              <button onClick={() => handleModelChange('qwen3-coder')} className={`w-full p-4 border-2 rounded-xl text-left transition-all ${selectedModel === 'qwen3-coder' ? 'border-[#D97757] bg-[#FEF7F4]' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'}`}>
-                <div className="flex items-center justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                      <h3 className="font-semibold text-gray-800">Qwen3-Coder-Plus</h3>
-                      <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-xs rounded-full">编码增强</span>
-                    </div>
-                    <p className="text-sm text-gray-500">通义千问编码增强版，逻辑能力强</p>
-                    <p className="text-xs text-gray-400 mt-1">✓ 逻辑推理强 • 结构化输出好 • 适合复杂需求</p>
-                  </div>
-                  {selectedModel === 'qwen3-coder' && <CheckCircle className="w-6 h-6 text-[#D97757] flex-shrink-0" />}
-                </div>
-              </button>
-            </div>
-            <div className="px-6 pb-6">
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
-                <p className="text-xs text-amber-800">💡 提示：两个模型均通过心流开放平台提供。DeepSeek-V3 速度更快，Qwen3-Coder-Plus 逻辑推理更强。</p>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 模型选择弹窗已移除 - 模型切换通过侧边栏完成 */}
 
       {/* Red Alert GI Watermark */}
       <div className="gi-watermark">
